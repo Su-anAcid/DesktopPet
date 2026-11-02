@@ -1,0 +1,15 @@
+# 构建产物
+build/
+dist/
+DesktopPet.app/
+*.dmg
+*.zip
+
+# Windows 版构建产物
+Windows/build/
+
+# 开发临时文件
+art-preview.png
+.DS_Store
+*.o
+*.pdb
