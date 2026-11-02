@@ -16,6 +16,7 @@ MIN_MACOS="11.0"
 echo "▸ 发布版本 v$VERSION (build $BUILD_NUMBER)"
 
 # ---------- 1. 图标 ----------
+mkdir -p build
 if [ ! -f build/AppIcon.icns ] || [ Sources/IconGen.swift -nt build/AppIcon.icns ] || [ Sources/SpriteData.swift -nt build/AppIcon.icns ]; then
   echo "▸ 生成应用图标..."
   swiftc -O -D ICONGEN Sources/SpriteData.swift Sources/IconGen.swift Sources/main.swift -o build/icongen

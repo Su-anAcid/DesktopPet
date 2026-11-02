@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 VERSION="1.0.0"
 APP="build/DesktopPet.app"
 
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build
+mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 # 1. 应用图标：图标源码有更新或 icns 缺失时重新生成
 if [ ! -f build/AppIcon.icns ] || [ Sources/IconGen.swift -nt build/AppIcon.icns ] || [ Sources/SpriteData.swift -nt build/AppIcon.icns ]; then
