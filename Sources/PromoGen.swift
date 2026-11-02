@@ -53,8 +53,7 @@ func generatePromo() {
     drawCat("sleepB", palette: 2, at: CGPoint(x: 1180, y: 140), scale: 6.2)  // 黑猫打盹
 
     // 右上角应用图标（柔光正落在它身上）
-    if let iconImg = NSImage(contentsOfFile:
-        "/Users/suanacid/WorkBuddy/workspace/DesktopPet/build/icon/AppIcon.iconset/icon_512x512.png"),
+    if let iconImg = NSImage(contentsOfFile: "build/icon/AppIcon.iconset/icon_512x512.png"),
        let tiff = iconImg.tiffRepresentation,
        let cg = NSBitmapImageRep(data: tiff)?.cgImage {
         ctx.interpolationQuality = .high
@@ -94,7 +93,7 @@ func generatePromo() {
 
         NSGraphicsContext.restoreGraphicsState()
 
-    let url = URL(fileURLWithPath: "/Users/suanacid/WorkBuddy/workspace/DesktopPet/docs/hero.png")
+    let url = URL(fileURLWithPath: "docs/hero.png")
     try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
     try! rep.representation(using: .png, properties: [:])!.write(to: url)

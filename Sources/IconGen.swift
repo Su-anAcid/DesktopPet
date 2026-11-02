@@ -5,7 +5,9 @@ import CoreGraphics
 // MARK: - 应用图标生成器
 // 用像素猫坐姿渲染成 macOS 风格（超级椭圆底板 + 渐变背景 + 投影）的应用图标
 
-let iconOutDir = URL(fileURLWithPath: "/Users/suanacid/WorkBuddy/workspace/DesktopPet/build/icon")
+// 输出目录：默认相对当前工作目录（仓库根），可用 ICON_OUT_DIR 覆盖
+let iconOutDir = URL(fileURLWithPath: ProcessInfo.processInfo.environment["ICON_OUT_DIR"] ?? "build/icon",
+                     isDirectory: true)
 
 /// 超级椭圆（squircle）路径，n 越大越方，macOS 图标约 n = 5
 func iconSquirclePath(in rect: CGRect, n: CGFloat = 5.0) -> CGPath {

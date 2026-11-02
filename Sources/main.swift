@@ -53,7 +53,7 @@ for (fi, frame) in frames.enumerated() {
     }
 }
 
-let url = URL(fileURLWithPath: "/Users/suanacid/WorkBuddy/workspace/DesktopPet/art-preview.png")
+let url = URL(fileURLWithPath: "art-preview.png")
 let rep = NSBitmapImageRep(cgImage: ctx.makeImage()!)
 try! rep.representation(using: .png, properties: [:])!.write(to: url)
 print("PREVIEW OK -> \(url.path)")
