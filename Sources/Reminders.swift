@@ -308,7 +308,7 @@ final class ReminderSettingsView: NSView {
         }
 
         // ── 底部说明
-        let tip = "关闭后猫不再主动说话；右键菜单里的「提醒一下倒计时」仍可手动播报。"
+        let tip = "关闭后猫不再主动说话；菜单栏猫头图标里的「提醒一下倒计时」仍可手动播报。"
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byWordWrapping
         let attr = NSAttributedString(string: tip, attributes: [

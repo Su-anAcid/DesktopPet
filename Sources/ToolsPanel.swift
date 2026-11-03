@@ -71,6 +71,8 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
 
     private var suppressAutoClose = false
     private var isShowing = false
+    /// 最近一次关闭的时间：右键开合时用来区分「刚被失焦关掉」和「用户想打开」
+    private(set) var lastClosedAt: Date?
 
     init(checkInStore: CheckInStore, countdownStore: CountdownStore,
          studyStore: StudyStore, settings: ReminderSettings) {
@@ -174,6 +176,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
 
     func close() {
         isShowing = false
+        lastClosedAt = Date()
         window.orderOut(nil)
     }
 

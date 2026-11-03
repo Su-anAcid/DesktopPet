@@ -8,7 +8,8 @@ final class PetView: NSView {
     var dragEnabled = true          // 固定位置时关闭拖动
     var onPat: (() -> Void)?
     var onDragEnd: (() -> Void)?
-    var menuProvider: (() -> NSMenu)?
+    /// 右键：直接打开小工具面板（毛色 / 大小 / 行为 / 退出都在菜单栏猫头图标里）
+    var onRightClick: (() -> Void)?
 
     override func draw(_ dirtyRect: NSRect) {
         guard let cg = petCG, let ctx = NSGraphicsContext.current else { return }
@@ -42,8 +43,7 @@ final class PetView: NSView {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        let menu = menuProvider?() ?? NSMenu()
-        menu.popUp(positioning: nil, at: convert(event.locationInWindow, from: nil), in: self)
+        onRightClick?()
     }
 }
 
@@ -271,7 +271,7 @@ final class PetController: NSObject {
             self?.savePrefs()
         }
         petView.dragEnabled = !isPinned      // 恢复上次的「固定位置」状态
-        petView.menuProvider = { [weak self] in self?.makeMenu() ?? NSMenu() }
+        petView.onRightClick = { [weak self] in self?.toggleToolsPanel() }
     }
 
     func start() {
@@ -307,6 +307,13 @@ final class PetController: NSObject {
         let forceBubble = ProcessInfo.processInfo.environment["DESKTOPPET_SHOW_BUBBLE"] != nil
         DispatchQueue.main.asyncAfter(deadline: .now() + (forceBubble ? 1.0 : 3.0)) { [weak self] in
             self?.maybeShowCountdownBubble(force: forceBubble)
+        }
+
+        // 调试钩子：DESKTOPPET_SHOW_ABOUT=1 直接弹「关于」，方便检查文案排版
+        if ProcessInfo.processInfo.environment["DESKTOPPET_SHOW_ABOUT"] != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.showAbout()
+            }
         }
 
         // 防止 App Nap 节流动画
@@ -890,122 +897,21 @@ final class PetController: NSObject {
         if reminderSettings.countdownEnabled { maybeShowCountdownBubble(force: false) }
     }
 
-    // MARK: 右键菜单
-    private func addHeader(_ title: String, to menu: NSMenu) {
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.isEnabled = false
-        menu.addItem(item)
-    }
-
-    private func makeMenu() -> NSMenu {
-        let menu = NSMenu()
-        // 所有菜单项的可用性由代码显式决定；关掉自动校验，
-        // 避免手动 popUp 的菜单因找不到校验对象而整项变灰
-        menu.autoenablesItems = false
-        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
-
-        // 顶部提示（新用户引导）
-        addHeader("左键拖动移动 · 单击摸猫 · 右键本菜单", to: menu)
-        let aboutItem = NSMenuItem(title: "关于桌面宠物 \(version)",
-                                   action: #selector(showAbout), keyEquivalent: "")
-        aboutItem.target = self
-        menu.addItem(aboutItem)
-        menu.addItem(.separator())
-
-        // 毛色
-        addHeader("毛色", to: menu)
-        for (i, p) in petPalettes.enumerated() {
-            let item = NSMenuItem(title: p.name, action: #selector(changePalette(_:)), keyEquivalent: "")
-            item.tag = i
-            item.target = self
-            item.state = i == paletteIndex ? .on : .off
-            menu.addItem(item)
+    // MARK: 右键 → 小工具面板
+    /// 右键点猫直接开面板（再点一次收起），回到上次看的 tab。
+    /// 毛色 / 大小 / 节奏 / 行为 / 退出都不在这儿，统一放在菜单栏猫头图标里。
+    private func toggleToolsPanel() {
+        if let c = toolsPanel {
+            if c.isVisible {
+                c.close()
+                return
+            }
+            // 点猫的瞬间面板会因为失焦自动关掉，这种情况下别又把它拉起来
+            if let t = c.lastClosedAt, Date().timeIntervalSince(t) < 0.4 { return }
         }
-        menu.addItem(.separator())
-
-        // 大小（百分比按实际落到的整数物理像素计算，避免出现分数像素）
-        addHeader("大小", to: menu)
-        let sizeNames = ["小", "中", "大"]
-        for (i, name) in sizeNames.enumerated() {
-            let pct = Int((devicePixel(for: i) / (Self.basePixel * backingScale) * 100).rounded())
-            let item = NSMenuItem(title: "\(name) (\(pct)%)",
-                                  action: #selector(changeSize(_:)), keyEquivalent: "")
-            item.tag = i
-            item.target = self
-            item.state = i == sizeIndex ? .on : .off
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-
-        // 过渡节奏
-        addHeader("过渡节奏", to: menu)
-        let tempoNames = ["慢", "正常", "快"]
-        for (i, name) in tempoNames.enumerated() {
-            let item = NSMenuItem(title: name, action: #selector(changeTempo(_:)), keyEquivalent: "")
-            item.tag = i
-            item.target = self
-            item.state = i == tempoIndex ? .on : .off
-            menu.addItem(item)
-        }
-        menu.addItem(.separator())
-
-        // 小工具
-        addHeader("小工具", to: menu)
-        let checkInItem = NSMenuItem(title: "打卡日历…", action: #selector(openTools(_:)), keyEquivalent: "")
-        checkInItem.tag = ToolsPanelController.Tab.checkIn.rawValue
-        checkInItem.target = self
-        menu.addItem(checkInItem)
-
-        let countdownItem = NSMenuItem(title: "事件倒计时…", action: #selector(openTools(_:)), keyEquivalent: "")
-        countdownItem.tag = ToolsPanelController.Tab.countdown.rawValue
-        countdownItem.target = self
-        menu.addItem(countdownItem)
-
-        let bubbleItem = NSMenuItem(title: "提醒一下倒计时", action: #selector(showCountdownBubbleNow), keyEquivalent: "")
-        bubbleItem.target = self
-        bubbleItem.isEnabled = !countdownStore.upcoming().isEmpty
-        menu.addItem(bubbleItem)
-
-        let settingsItem = NSMenuItem(title: "提醒设置…", action: #selector(openTools(_:)), keyEquivalent: "")
-        settingsItem.tag = ToolsPanelController.Tab.settings.rawValue
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-        menu.addItem(.separator())
-
-        // 行为
-        addHeader("行为", to: menu)
-        let sleepItem = NSMenuItem(title: state == .sleeping ? "唤醒" : "睡觉",
-                                   action: #selector(toggleSleep), keyEquivalent: "")
-        sleepItem.target = self
-        menu.addItem(sleepItem)
-
-        let pinItem = NSMenuItem(title: "固定位置（不随拖动移动）",
-                                 action: #selector(togglePin), keyEquivalent: "")
-        pinItem.target = self
-        pinItem.state = isPinned ? .on : .off
-        menu.addItem(pinItem)
-
-        let lickItem = NSMenuItem(title: "坐下前舔爪子",
-                                  action: #selector(toggleLick), keyEquivalent: "")
-        lickItem.target = self
-        lickItem.state = lickEnabled ? .on : .off
-        menu.addItem(lickItem)
-
-        let loginItem = NSMenuItem(title: "开机自动启动",
-                                   action: #selector(toggleLoginItem), keyEquivalent: "")
-        loginItem.target = self
-        loginItem.state = LoginItem.isEnabled ? .on : .off
-        loginItem.isEnabled = LoginItem.isAvailable
-        menu.addItem(loginItem)
-
-        menu.addItem(.separator())
-        // 注意：target 必须显式指向 self。PetController 是 NSObject，不在响应者链里，
-        // 若 target 为 nil，系统找不到响应者会直接把这一项置灰（之前「退不掉」的原因）
-        let quitItem = NSMenuItem(title: "退出桌面宠物", action: #selector(quit), keyEquivalent: "q")
-        quitItem.keyEquivalentModifierMask = [.command]
-        quitItem.target = self
-        menu.addItem(quitItem)
-        return menu
+        let saved = UserDefaults.standard.object(forKey: PrefKey.toolTab) as? Int
+        let tab = ToolsPanelController.Tab(rawValue: saved ?? 0) ?? .checkIn
+        openToolsPanel(tab: tab)
     }
 
     @objc private func changePalette(_ sender: NSMenuItem) {
@@ -1055,11 +961,22 @@ final class PetController: NSObject {
         let alert = NSAlert()
         alert.messageText = "桌面宠物 \(version)"
         alert.informativeText = """
-        一只住在桌面上的像素小猫。
+        一只住在桌面上的像素小猫。它自己散步、发呆、睡觉，顺便帮你记着日子。
 
-        左键拖动：移动位置
-        单击：摸猫（爱心眼）
-        右键：打开设置菜单
+        【鼠标操作】
+        • 左键拖动：把猫挪到别处（「固定位置」开启后不可拖动）
+        • 单击：摸猫，冒爱心眼和 ❤️
+        • 右键：打开或收起小工具面板（回到上次看的标签页）
+
+        【小工具面板】面板顶部切换三个标签
+        • 打卡：每天点一次「今天打卡」，猫会开心，月历留痕并统计连续天数；顶部「开始 / 暂停」记录学习时长，日历格子按时长深浅着色
+        • 倒计时：记下生日、上线、考试等日子，支持每年重复，按剩余天数排序
+        • 提醒：倒计时播报开关、开始提醒的范围（不限制 / 提前 30 天 / 提前 7 天 / 仅当天）、提醒间隔（每天 / 每 3 天 / 每 7 天）；学习计时中每过 5 / 10 / 15 / 30 分钟或自定义间隔，猫会冒气泡播报「已经学习了多久」
+
+        【其余设置】点菜单栏的猫头图标
+        显示 / 隐藏猫咪、回到桌面右下角、打卡日历 / 事件倒计时 / 提醒一下倒计时 / 提醒设置、睡觉 / 唤醒、固定位置、坐下前舔爪子、开机自动启动、外观（毛色 / 大小 / 过渡节奏）、关于、退出
+
+        所有数据只存在本机（UserDefaults），不上传。
 
         版本 \(version) (\(build)) · MIT License
         """
