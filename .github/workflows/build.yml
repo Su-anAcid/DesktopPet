@@ -90,15 +90,32 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
 
+      - name: 从 CHANGELOG 生成 Release 说明
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          BODY=$(awk -v v="## $VERSION" 'index($0, v)==1 {f=1; next} f && /^## / {exit} f {print}' CHANGELOG.md)
+          if [ -z "$BODY" ]; then BODY="详见 CHANGELOG.md。"; fi
+          {
+            echo "body<<WB_EOF"
+            echo "$BODY"
+            echo ""
+            echo "---"
+            echo "**安装**：macOS 下载 dmg（首次打开需在「应用程序」里右键 → 打开）；Windows 下载 windows-x64.zip，解压后双击 exe 即可。"
+            echo "WB_EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body: ${{ steps.notes.outputs.body }}
           files: |
             artifacts/*.dmg
             artifacts/*.zip
