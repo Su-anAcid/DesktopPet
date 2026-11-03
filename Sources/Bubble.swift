@@ -119,9 +119,9 @@ private final class BubbleView: NSView {
     }
 }
 
-// MARK: - 倒计时气泡
-/// 猫头顶冒出来的一句提醒，7 秒后自己消失；点一下打开倒计时面板。
-final class CountdownBubble {
+// MARK: - 猫的气泡
+/// 猫头顶冒出来的一句提醒（倒计时 / 学习时长），7 秒后自己消失；点一下打开对应面板。
+final class PetBubble {
     private let window: NSPanel
     private let view: BubbleView
     private var hideTimer: Timer?

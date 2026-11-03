@@ -92,6 +92,12 @@ enum PrefKey {
     static let toolTab = "toolTab"
     static let countdownBubbleDay = "countdownBubbleDay"
     static let studySeconds = "studySeconds"
+    // 提醒设置
+    static let cdRemindEnabled = "cdRemindEnabled"
+    static let cdRemindLead = "cdRemindLead"
+    static let cdRemindInterval = "cdRemindInterval"
+    static let studyRemindEnabled = "studyRemindEnabled"
+    static let studyRemindInterval = "studyRemindInterval"
 }
 
 // MARK: - 开机自动启动（LaunchAgent）
@@ -162,10 +168,14 @@ final class PetController: NSObject {
     let checkInStore = CheckInStore()
     let countdownStore = CountdownStore()
     let studyStore = StudyStore()
+    let reminderSettings = ReminderSettings()
     private var toolsPanel: ToolsPanelController?
     private var cachedDayKey = DayKey.todayKey()
-    private var bubbleShownDay = UserDefaults.standard.string(forKey: PrefKey.countdownBubbleDay) ?? ""
-    private var countdownBubble: CountdownBubble?
+    private var lastBubbleDay = UserDefaults.standard.string(forKey: PrefKey.countdownBubbleDay) ?? ""
+    private var countdownBubble: PetBubble?
+    /// 上一次「学习时长」播报时的今日累计秒数（用于按间隔触发）
+    private var studyAnnounceBase = 0
+    private var studyWasRunning = false
 
     // 过渡动画时间轴
     private var transSeq: [(String, Int)] = []
@@ -202,6 +212,7 @@ final class PetController: NSObject {
         super.init()
         loadPrefs()
         setupPanel()
+        reminderSettings.onChange = { [weak self] in self?.reminderSettingsChanged() }
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.studyStore.pause()     // 结算最后一段学习时间并落盘
@@ -275,9 +286,14 @@ final class PetController: NSObject {
         layoutPetView()
         updateImage()
 
-        // 调试钩子：DESKTOPPET_OPEN_TOOLS=checkin|countdown 启动后直接打开面板，方便自测
+        // 调试钩子：DESKTOPPET_OPEN_TOOLS=checkin|countdown|settings 启动后直接打开面板，方便自测
         if let raw = ProcessInfo.processInfo.environment["DESKTOPPET_OPEN_TOOLS"] {
-            let tab: ToolsPanelController.Tab = (raw == "countdown") ? .countdown : .checkIn
+            let tab: ToolsPanelController.Tab
+            switch raw {
+            case "countdown": tab = .countdown
+            case "settings": tab = .settings
+            default: tab = .checkIn
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 guard let self else { return }
                 let c = self.toolsPanel ?? self.makeToolsPanel()
@@ -362,6 +378,12 @@ final class PetController: NSObject {
         if state == .sleeping && tickCount % 110 == 0 { spawnZ() }
 
         // 学习计时：主循环驱动，休眠/卡顿后的时间跳变会被 tick 内部削掉
+        if studyStore.isRunning && !studyWasRunning {
+            // 开始（或从暂停恢复）：按当前进度对齐到间隔网格，避免一恢复就立刻播报
+            let step = max(60, reminderSettings.studyIntervalMinutes * 60)
+            studyAnnounceBase = (studyStore.todaySeconds / step) * step
+        }
+        studyWasRunning = studyStore.isRunning
         studyStore.tick()
 
         if state == .transition {
@@ -374,6 +396,7 @@ final class PetController: NSObject {
         if tickCount % 30 == 0 {
             refreshDayIfNeeded()
             maybeShowCountdownBubble(force: false)
+            maybeShowStudyBubble()
         }
 
         // 猫在散步时气泡跟着走（10Hz 足够，不必每帧挪窗口）
@@ -619,6 +642,11 @@ final class PetController: NSObject {
         statusBubble.isEnabled = !countdownStore.upcoming().isEmpty
         menu.addItem(statusBubble)
 
+        let statusSettings = NSMenuItem(title: "提醒设置…", action: #selector(openTools(_:)), keyEquivalent: "")
+        statusSettings.tag = ToolsPanelController.Tab.settings.rawValue
+        statusSettings.target = self
+        menu.addItem(statusSettings)
+
         menu.addItem(.separator())
 
         let sleep = NSMenuItem(title: state == .sleeping ? "唤醒猫咪" : "让猫咪睡觉",
@@ -705,11 +733,12 @@ final class PetController: NSObject {
         savePrefs()
     }
 
-    // MARK: 小工具（打卡日历 / 事件倒计时）
+    // MARK: 小工具（打卡日历 / 事件倒计时 / 提醒设置）
     private func makeToolsPanel() -> ToolsPanelController {
         let c = ToolsPanelController(checkInStore: checkInStore,
                                      countdownStore: countdownStore,
-                                     studyStore: studyStore)
+                                     studyStore: studyStore,
+                                     settings: reminderSettings)
         c.accentProvider = { [weak self] in
             guard let self else { return .controlAccentColor }
             return ToolStyle.accent(from: petPalettes[self.paletteIndex].colors["g"])
@@ -720,6 +749,14 @@ final class PetController: NSObject {
             // 里程碑额外报一次
             if [1, 3, 7, 14, 21, 30, 50, 100, 200, 365].contains(streak) {
                 self.spawnParticles("连续 \(streak) 天！", count: 1)
+            }
+            // 打卡时把「今天学了多久」一起说出来（跟着学习提醒的开关走）
+            let studied = self.studyStore.todaySeconds
+            if self.reminderSettings.studyEnabled, studied >= 60 {
+                self.presentBubble(title: "今日打卡",
+                                   message: "今天已经学习 \(StudyStore.format(studied)) 了",
+                                   hint: "连续 \(streak) 天 · 点我看看日历",
+                                   tab: .checkIn)
             }
         }
         c.onDuplicate = { [weak self] in
@@ -773,13 +810,27 @@ final class PetController: NSObject {
                       width: pv.width, height: pv.height)
     }
 
-    /// 让猫张嘴说一句倒计时。每天主动说一次；force = 用户手动点 / 刚添加了事件
+    /// 让猫张嘴说一句倒计时。是否开启、提前范围、提醒间隔都在「提醒」设置页里。
+    /// force = 用户手动点 / 刚添加了事件（跳过所有节奏限制，但仍然是用户主动要的）
     private func maybeShowCountdownBubble(force: Bool) {
+        guard force || reminderSettings.countdownEnabled else { return }
         let rows = countdownStore.upcoming()
         guard let first = rows.first else { return }
+
+        // 提前范围：事件还没进入「开始提醒」的窗口就完全不打扰
+        if !force && !reminderSettings.isInRange(days: first.days) { return }
+
         let today = DayKey.todayKey()
-        if !force && bubbleShownDay == today { return }
-        bubbleShownDay = today
+        if !force {
+            guard lastBubbleDay != today else { return }        // 今天已经说过
+            // 间隔：距上次播报不足 N 天就跳过；事件当天例外，必须提醒
+            if first.days > 0,
+               let gap = DayKey.daysBetween(lastBubbleDay, today), gap >= 0,
+               gap < reminderSettings.countdownInterval.days {
+                return
+            }
+        }
+        lastBubbleDay = today
         UserDefaults.standard.set(today, forKey: PrefKey.countdownBubbleDay)
 
         let message: String
@@ -790,20 +841,53 @@ final class PetController: NSObject {
         }
         let hint = rows.count > 1 ? "点我看看另外 \(rows.count - 1) 个日子" : "点我打开倒计时"
 
-        let bubble: CountdownBubble
+        presentBubble(title: "倒计时提醒", message: message, hint: hint, tab: .countdown)
+    }
+
+    /// 学习计时中按间隔播报「已经学了多久」
+    private func maybeShowStudyBubble() {
+        guard reminderSettings.studyEnabled, studyStore.isRunning else { return }
+        let step = max(60, reminderSettings.studyIntervalMinutes * 60)
+        let now = studyStore.todaySeconds
+        // 跨天或数据被清零：重新按间隔网格对齐，避免一直不播报
+        if now < studyAnnounceBase { studyAnnounceBase = (now / step) * step }
+        guard now - studyAnnounceBase >= step else { return }
+        guard countdownBubble?.isVisible != true else { return }   // 让正在说话的气泡先说完
+        studyAnnounceBase = now
+
+        let message = now >= 3600
+            ? "已经学习 \(StudyStore.format(now)) 了，起来走两步？"
+            : "已经学习 \(StudyStore.format(now)) 啦，再接再厉"
+        presentBubble(title: "学习计时", message: message,
+                      hint: "点我打开打卡日历", tab: .checkIn)
+    }
+
+    /// 统一的「猫说话」入口：同一个气泡窗口复用，点一下跳到对应面板
+    private func presentBubble(title: String, message: String, hint: String,
+                               tab: ToolsPanelController.Tab) {
+        let bubble: PetBubble
         if let existing = countdownBubble {
             bubble = existing
         } else {
-            let fresh = CountdownBubble()
-            fresh.onClick = { [weak self] in self?.openToolsPanel(tab: .countdown) }
+            let fresh = PetBubble()
             countdownBubble = fresh
             bubble = fresh
         }
-        bubble.show(title: "倒计时提醒",
+        bubble.onClick = { [weak self] in self?.openToolsPanel(tab: tab) }
+        bubble.show(title: title,
                     message: message,
                     hint: hint,
                     accent: ToolStyle.accent(from: petPalettes[paletteIndex].colors["g"]),
                     near: catRectOnScreen())
+    }
+
+    /// 设置项改动后：重置播报节奏，并把设置页刷成最新的
+    private func reminderSettingsChanged() {
+        let step = max(60, reminderSettings.studyIntervalMinutes * 60)
+        studyAnnounceBase = (studyStore.todaySeconds / step) * step
+        toolsPanel?.refreshSettings()
+        // 刚打开倒计时提醒且今天还没说过 → 立刻给个反馈
+        if reminderSettings.countdownEnabled { maybeShowCountdownBubble(force: false) }
     }
 
     // MARK: 右键菜单
@@ -881,6 +965,11 @@ final class PetController: NSObject {
         bubbleItem.target = self
         bubbleItem.isEnabled = !countdownStore.upcoming().isEmpty
         menu.addItem(bubbleItem)
+
+        let settingsItem = NSMenuItem(title: "提醒设置…", action: #selector(openTools(_:)), keyEquivalent: "")
+        settingsItem.tag = ToolsPanelController.Tab.settings.rawValue
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
 
         // 行为

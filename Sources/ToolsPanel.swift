@@ -41,6 +41,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     enum Tab: Int {
         case checkIn = 0
         case countdown = 1
+        case settings = 2
     }
 
     static let panelSize = NSSize(width: 320, height: 448)
@@ -52,10 +53,12 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     private let band: TodayBandView
     private let calendarView: CheckInCalendarView
     private let countdownView: CountdownListView
+    private let settingsView: ReminderSettingsView
 
     let checkInStore: CheckInStore
     let countdownStore: CountdownStore
     let studyStore: StudyStore
+    let settings: ReminderSettings
 
     /// 主色跟随当前毛色（由 PetController 注入）
     var accentProvider: () -> NSColor = { .controlAccentColor }
@@ -69,19 +72,22 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     private var suppressAutoClose = false
     private var isShowing = false
 
-    init(checkInStore: CheckInStore, countdownStore: CountdownStore, studyStore: StudyStore) {
+    init(checkInStore: CheckInStore, countdownStore: CountdownStore,
+         studyStore: StudyStore, settings: ReminderSettings) {
         self.checkInStore = checkInStore
         self.countdownStore = countdownStore
         self.studyStore = studyStore
+        self.settings = settings
         self.calendarView = CheckInCalendarView(store: checkInStore, study: studyStore)
         self.countdownView = CountdownListView(store: countdownStore)
+        self.settingsView = ReminderSettingsView(settings: settings, store: countdownStore)
 
         window = NSPanel(contentRect: NSRect(origin: .zero, size: Self.panelSize),
                          styleMask: [.titled, .closable, .fullSizeContentView],
                          backing: .buffered, defer: false)
         container = ToolsContentView(frame: NSRect(origin: .zero, size: Self.panelSize))
         effect = NSVisualEffectView(frame: container.bounds)
-        segmented = NSSegmentedControl(labels: ["打卡", "倒计时"],
+        segmented = NSSegmentedControl(labels: ["打卡", "倒计时", "提醒"],
                                        trackingMode: .selectOne, target: nil, action: nil)
         band = TodayBandView(frame: .zero)
 
@@ -121,6 +127,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
 
         container.addSubview(calendarView)
         container.addSubview(countdownView)
+        container.addSubview(settingsView)
 
         container.onCancel = { [weak self] in self?.close() }
         window.contentView = container
@@ -136,6 +143,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         }
         countdownView.onAdd = { [weak self] in self?.presentAddEvent() }
         countdownView.onDelete = { [weak self] _ in self?.eventsChanged() }
+        settingsView.onCustomInterval = { [weak self] in self?.presentCustomInterval() }
     }
 
     // MARK: 显示 / 关闭
@@ -146,6 +154,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         applyAccent()
         calendarView.refresh()            // 每次打开重置到当前月并重算统计
         countdownView.reload()
+        settingsView.refresh()
         updateBand()
         applyTab(tab)
         layoutContent()
@@ -174,6 +183,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     func refreshForNewDay() {
         calendarView.refreshDay()
         countdownView.reload()
+        settingsView.refresh()
         updateBand()
     }
 
@@ -181,7 +191,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     private func layoutContent() {
         let b = container.bounds
         let segH: CGFloat = 28
-        let segW: CGFloat = 156
+        let segW: CGFloat = 208
         segmented.frame = NSRect(x: (b.width - segW) / 2, y: b.height - 8 - segH,
                                  width: segW, height: segH)
 
@@ -198,19 +208,29 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         let content = NSRect(x: 0, y: 4, width: b.width, height: max(0, top - 4))
         calendarView.frame = content
         countdownView.frame = content
+        settingsView.frame = content
     }
 
     private func applyAccent() {
         let accent = accentProvider()
         calendarView.accent = accent
         countdownView.accent = accent
+        settingsView.accent = accent
         band.accent = accent
     }
 
     private func applyTab(_ tab: Tab) {
         calendarView.isHidden = tab != .checkIn
         countdownView.isHidden = tab != .countdown
+        settingsView.isHidden = tab != .settings
         if tab == .countdown { countdownView.reload() }
+        if tab == .settings { settingsView.refresh() }
+    }
+
+    /// 设置项改动后由控制器调用（面板可能开着）
+    func refreshSettings() {
+        settingsView.refresh()
+        updateBand()
     }
 
     private func updateBand() {
@@ -339,6 +359,54 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     private func eventsChanged() {
         updateBand()
         onEventsChanged?()
+    }
+
+    // MARK: 自定义学习播报间隔
+    private func presentCustomInterval() {
+        NSApp.activate(ignoringOtherApps: true)
+        suppressAutoClose = true          // 弹窗期间不要把面板关掉
+        defer {
+            suppressAutoClose = false
+            settingsView.refresh()
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "自定义播报间隔"
+        let range = ReminderSettings.StudyInterval.self
+        alert.informativeText = "学习计时中，每过这么久猫就报一次已学时长（\(range.minMinutes)–\(range.maxMinutes) 分钟）。"
+        alert.addButton(withTitle: "确定")
+        alert.addButton(withTitle: "取消")
+
+        let prefix = NSTextField(labelWithString: "每隔")
+        prefix.font = NSFont.systemFont(ofSize: 13)
+        let suffix = NSTextField(labelWithString: "分钟")
+        suffix.font = NSFont.systemFont(ofSize: 13)
+
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 64, height: 24))
+        field.font = NSFont.systemFont(ofSize: 13)
+        field.alignment = .center
+        field.stringValue = "\(settings.studyIntervalMinutes)"
+
+        let stack = NSStackView(views: [prefix, field, suffix])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 8
+        stack.frame = NSRect(x: 0, y: 0, width: 180, height: 26)
+        alert.accessoryView = stack
+
+        while true {
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            guard let minutes = Int(field.stringValue.trimmingCharacters(in: .whitespaces)) else {
+                alert.informativeText = "请输入整数分钟数"
+                continue
+            }
+            guard (range.minMinutes...range.maxMinutes).contains(minutes) else {
+                alert.informativeText = "请填 \(range.minMinutes)–\(range.maxMinutes) 之间的分钟数"
+                continue
+            }
+            settings.setStudyInterval(minutes: minutes)
+            return
+        }
     }
 
     // MARK: NSWindowDelegate
