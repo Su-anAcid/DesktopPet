@@ -533,6 +533,9 @@ final class PetController: NSObject {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        // 所有菜单项的可用性由代码显式决定；关掉自动校验，
+        // 避免手动 popUp 的菜单因找不到校验对象而整项变灰
+        menu.autoenablesItems = false
         let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
 
         // 顶部提示（新用户引导）
@@ -607,7 +610,12 @@ final class PetController: NSObject {
         menu.addItem(loginItem)
 
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "退出桌面宠物", action: #selector(quit), keyEquivalent: ""))
+        // 注意：target 必须显式指向 self。PetController 是 NSObject，不在响应者链里，
+        // 若 target 为 nil，系统找不到响应者会直接把这一项置灰（之前「退不掉」的原因）
+        let quitItem = NSMenuItem(title: "退出桌面宠物", action: #selector(quit), keyEquivalent: "q")
+        quitItem.keyEquivalentModifierMask = [.command]
+        quitItem.target = self
+        menu.addItem(quitItem)
         return menu
     }
 
