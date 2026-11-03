@@ -14,8 +14,13 @@ if ! command -v "$CXX" >/dev/null 2>&1; then
   exit 1
 fi
 if ! command -v "$WINDRES" >/dev/null 2>&1; then
-  echo "找不到 $WINDRES（需要 mingw-w64 的 binutils，例如 apt/msys2 的 binutils 包）" >&2
-  exit 1
+  # 有的环境（比如只装了 msys 版 binutils）只有不带前缀的 windres
+  if command -v windres >/dev/null 2>&1; then
+    WINDRES=windres
+  else
+    echo "找不到 $WINDRES（需要 mingw-w64 的 binutils，例如 msys2 的 mingw-w64-ucrt-x86_64-binutils）" >&2
+    exit 1
+  fi
 fi
 
 # ① 精灵帧：仓库里已有 assets/pet.dat；缺了才从 macOS 版绘制代码导出

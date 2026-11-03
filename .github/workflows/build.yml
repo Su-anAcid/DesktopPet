@@ -42,6 +42,16 @@ jobs:
             mingw-w64-ucrt-x86_64-binutils
             zip
 
+      - name: Ensure toolchain
+        shell: msys2 {0}
+        run: |
+          set +e
+          pacman -S --noconfirm --needed mingw-w64-ucrt-x86_64-binutils > /tmp/pkg.log 2>&1
+          echo "pacman exit=$?"; tail -n 15 /tmp/pkg.log
+          # 注解公开可读，方便没有日志权限时排查
+          echo "::error::PKG> $(pacman -Q 2>/dev/null | grep -iE 'binutils|ucrt-x86_64-gcc' | tr '\n' ' ')"
+          echo "::error::RES> $(ls /ucrt64/bin/*windres* 2>/dev/null | tr '\n' ' ') $(command -v windres || echo no-windres)"
+
       - name: Build & package
         shell: msys2 {0}
         run: |
