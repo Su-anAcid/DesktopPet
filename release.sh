@@ -33,7 +33,7 @@ plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP/Contents/Info.plis
 cp -f build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # ---------- 3. 通用二进制 ----------
-SRCS=(Sources/SpriteData.swift Sources/App.swift Sources/CheckIn.swift Sources/Countdown.swift Sources/ToolsPanel.swift)
+SRCS=(Sources/SpriteData.swift Sources/App.swift Sources/CheckIn.swift Sources/Countdown.swift Sources/ToolsPanel.swift Sources/Study.swift Sources/Bubble.swift)
 echo "▸ 编译 arm64 ..."
 swiftc -O -target arm64-apple-macos$MIN_MACOS "${SRCS[@]}" -o build/release/pet-arm64
 echo "▸ 编译 x86_64 ..."

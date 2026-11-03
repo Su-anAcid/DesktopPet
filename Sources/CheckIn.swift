@@ -227,15 +227,18 @@ final class CheckInCalendarView: NSView {
     var onSelectDay: ((String) -> Void)?
 
     private let store: CheckInStore
+    private let study: StudyStore
     private var year: Int = 2026
     private var month: Int = 1
     private var selectedKey: String?
     private var hoveredKey: String?
     private var hoveredButton = false
+    private var hoveredStripButton = false
     private var hoveredArrow = 0            // -1 左箭头 / 1 右箭头 / 0 无
     private var popKey: String?
     private var popScale: CGFloat = 1
     private var popTimer: Timer?
+    private var studyTimer: Timer?
 
     // 布局常量
     private let sidePad: CGFloat = 20
@@ -244,18 +247,21 @@ final class CheckInCalendarView: NSView {
     private let rowGap: CGFloat = 4
     private let headerH: CGFloat = 22
     private let weekdayH: CGFloat = 14
-    private let statsH: CGFloat = 50
+    private let stripH: CGFloat = 32
     private let cellRadius: CGFloat = 8
 
     private var cellRects: [(key: String, rect: NSRect)] = []
     private var buttonRect: NSRect = .zero
     private var prevRect: NSRect = .zero
     private var nextRect: NSRect = .zero
+    private var stripRect: NSRect = .zero
+    private var stripButtonRect: NSRect = .zero
     private var separatorRect: NSRect = .zero
     private var statsBlockBottom: CGFloat = 6
 
-    init(store: CheckInStore) {
+    init(store: CheckInStore, study: StudyStore) {
         self.store = store
+        self.study = study
         super.init(frame: .zero)
         resetToCurrentMonth()
     }
@@ -275,11 +281,41 @@ final class CheckInCalendarView: NSView {
 
     func refresh() {
         resetToCurrentMonth()
+        syncStudyTimer()
         needsDisplay = true
     }
 
     /// 跨天时只重算，不重置用户正在看的月份
-    func refreshDay() { needsDisplay = true }
+    func refreshDay() {
+        syncStudyTimer()
+        needsDisplay = true
+    }
+
+    /// 计时开始/暂停后，让秒数每秒刷新一次
+    private func syncStudyTimer() {
+        if study.isRunning, window != nil {
+            guard studyTimer == nil else { return }
+            let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                guard self.study.isRunning, self.window?.isVisible == true else {
+                    self.studyTimer?.invalidate()
+                    self.studyTimer = nil
+                    return
+                }
+                self.needsDisplay = true
+            }
+            RunLoop.main.add(t, forMode: .common)
+            studyTimer = t
+        } else {
+            studyTimer?.invalidate()
+            studyTimer = nil
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        syncStudyTimer()
+    }
 
     private var todayKey: String { DayKey.todayKey() }
 
@@ -301,7 +337,7 @@ final class CheckInCalendarView: NSView {
     }
 
     // MARK: 布局
-    private func gridTop() -> CGFloat { bounds.height - headerH - weekdayH }
+    private func gridTop() -> CGFloat { bounds.height - stripH - headerH - weekdayH }
 
     private func layoutRects() {
         cellRects.removeAll()
@@ -319,8 +355,14 @@ final class CheckInCalendarView: NSView {
             cellRects.append((key, rect))
         }
 
+        // 顶部「今日学习」条
+        stripRect = NSRect(x: sidePad, y: bounds.height - stripH + 2,
+                           width: bounds.width - sidePad * 2, height: stripH - 4)
+        stripButtonRect = NSRect(x: stripRect.maxX - 10 - 64, y: stripRect.midY - 11,
+                                 width: 64, height: 22)
+
         // 月份左右箭头
-        let titleY = bounds.height - headerH
+        let titleY = bounds.height - stripH - headerH
         prevRect = NSRect(x: sidePad, y: titleY, width: 24, height: headerH)
         nextRect = NSRect(x: bounds.width - sidePad - 24, y: titleY, width: 24, height: headerH)
 
@@ -330,33 +372,86 @@ final class CheckInCalendarView: NSView {
         let separatorY = ToolStyle.px(gridBottom - 8, scale)
         separatorRect = NSRect(x: sidePad, y: separatorY, width: bounds.width - sidePad * 2, height: 1)
 
-        let blockH: CGFloat = 56
+        let blockH: CGFloat = 62
         let regionBottom: CGFloat = 4
-        let regionTop = separatorY - 4
+        let regionTop = separatorY - 6
         statsBlockBottom = regionBottom + max(0, (regionTop - regionBottom - blockH) / 2)
 
-        // 打卡按钮（右下）
-        let title = store.checkedToday ? "已打卡 ✓" : "今天打卡"
-        let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        let textW = (title as NSString).size(withAttributes: [.font: font]).width
-        let w = max(88, textW + 8 + 6 + 26)
-        buttonRect = NSRect(x: bounds.width - sidePad - w,
-                            y: statsBlockBottom + (blockH - 32) / 2,
-                            width: w, height: 32)
+        // 打卡按钮（右上，与连续天数同一行；第二行留给文字，避免压住按钮）
+        buttonRect = NSRect(x: bounds.width - sidePad - 96,
+                            y: statsBlockBottom + 24,
+                            width: 96, height: 32)
     }
 
     // MARK: 绘制
     override func draw(_ dirtyRect: NSRect) {
         layoutRects()
         let scale = ToolStyle.backingScale(self)
+        drawStudyStrip(scale: scale)
         drawMonthHeader(scale: scale)
         drawWeekdayRow(scale: scale)
         drawCells(scale: scale)
         drawStats(scale: scale)
     }
 
+    /// 顶部学习计时条：今日累计时长 + 开始/暂停
+    private func drawStudyStrip(scale: CGFloat) {
+        accent.withAlphaComponent(0.09).setFill()
+        NSBezierPath(roundedRect: stripRect, xRadius: 10, yRadius: 10).fill()
+
+        let running = study.isRunning
+        let label = ToolStyle.text("今日学习", font: NSFont.systemFont(ofSize: 11),
+                                   color: .secondaryLabelColor)
+        let labelSize = label.size()
+        label.draw(at: NSPoint(x: stripRect.minX + 12, y: stripRect.midY - labelSize.height / 2))
+
+        let value = ToolStyle.text(StudyStore.format(study.todaySeconds),
+                                   font: ToolStyle.rounded(12, .semibold),
+                                   color: running ? accent : .labelColor)
+        let valueSize = value.size()
+        value.draw(at: NSPoint(x: stripRect.minX + 12 + labelSize.width + 6,
+                               y: stripRect.midY - valueSize.height / 2))
+
+        // 计时中的小圆点（呼吸闪烁）
+        if running {
+            let on = Int(Date().timeIntervalSince1970) % 2 == 0
+            accent.withAlphaComponent(on ? 0.9 : 0.3).setFill()
+            let d: CGFloat = 5
+            NSBezierPath(ovalIn: NSRect(x: stripRect.minX + 12 + labelSize.width + 6 + valueSize.width + 7,
+                                        y: stripRect.midY - d / 2, width: d, height: d)).fill()
+        }
+
+        // 色阶图例：五个小方块对应 30 分内 → 4 小时以上
+        let legendSize: CGFloat = 7
+        let legendGap: CGFloat = 3
+        let legendW = CGFloat(5) * legendSize + 4 * legendGap
+        let legendX = stripButtonRect.minX - 12 - legendW
+        for i in 1...5 {
+            let r = NSRect(x: legendX + CGFloat(i - 1) * (legendSize + legendGap),
+                           y: stripRect.midY - legendSize / 2,
+                           width: legendSize, height: legendSize)
+            StudyTier.fill(i, accent: accent).setFill()
+            NSBezierPath(roundedRect: r, xRadius: 2, yRadius: 2).fill()
+        }
+
+        // 右侧按钮
+        if running {
+            accent.withAlphaComponent(hoveredStripButton ? 0.26 : 0.18).setFill()
+        } else {
+            accent.withAlphaComponent(hoveredStripButton ? 0.85 : 1.0).setFill()
+        }
+        NSBezierPath(roundedRect: stripButtonRect, xRadius: 11, yRadius: 11).fill()
+
+        let title = running ? "暂停" : "开始"
+        let str = ToolStyle.text(title, font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                                 color: running ? accent : ToolStyle.onAccent)
+        let size = str.size()
+        str.draw(at: NSPoint(x: stripButtonRect.midX - size.width / 2,
+                             y: stripButtonRect.midY - size.height / 2))
+    }
+
     private func drawMonthHeader(scale: CGFloat) {
-        let titleY = bounds.height - headerH
+        let titleY = bounds.height - stripH - headerH
         let title = DayKey.monthTitle(year: year, month: month)
         let font = ToolStyle.rounded(13, .semibold)
         let str = ToolStyle.text(title, font: font, color: .labelColor)
@@ -412,6 +507,9 @@ final class CheckInCalendarView: NSView {
             }
             let checked = store.isChecked(key)
             let isToday = key == today
+            // 学习时长决定格子颜色：学得越久，颜色越深
+            let minutes = study.minutes(for: key)
+            let tier = StudyTier.level(minutes: minutes)
 
             // hover 高亮（底部圆角底）
             if hoveredKey == key && !isFuture {
@@ -432,13 +530,14 @@ final class CheckInCalendarView: NSView {
             var alpha: CGFloat = 1
 
             if checked {
-                // 已打卡：主色实心块（新打卡的格子有一次 0.2s 缩放入场）
+                // 已打卡：实心块，颜色按当天学习时长走色阶
+                // （新打卡的格子有一次 0.2s 缩放入场）
                 let s: CGFloat = (popKey == key) ? popScale : 1
                 let w = square.width * s
                 let scaled = NSRect(x: square.midX - w / 2, y: square.midY - w / 2, width: w, height: w)
-                accent.setFill()
+                StudyTier.fill(tier, accent: accent).setFill()
                 NSBezierPath(roundedRect: scaled, xRadius: cellRadius * s, yRadius: cellRadius * s).fill()
-                numberColor = ToolStyle.onAccent
+                numberColor = StudyTier.onFill(tier)
             } else if isToday {
                 // 今天未打卡：主色描边 + 主色数字
                 let p = NSBezierPath(roundedRect: square.insetBy(dx: 0.75, dy: 0.75),
@@ -447,15 +546,46 @@ final class CheckInCalendarView: NSView {
                 accent.setStroke()
                 p.stroke()
                 numberColor = accent
+                if tier > 0 {
+                    // 学过但忘了打卡：淡一层色阶打个底
+                    StudyTier.fill(tier, accent: accent).withAlphaComponent(0.14).setFill()
+                    NSBezierPath(roundedRect: square, xRadius: cellRadius, yRadius: cellRadius).fill()
+                    numberColor = accent
+                }
             } else if isFuture {
                 alpha = 0.3
+            } else if tier > 0 {
+                // 过去某天有计时但没打卡
+                StudyTier.fill(tier, accent: accent).withAlphaComponent(0.14).setFill()
+                NSBezierPath(roundedRect: square, xRadius: cellRadius, yRadius: cellRadius).fill()
+                numberColor = StudyTier.text(tier)
             }
 
             let day = cal.component(.day, from: DayKey.parse(key) ?? Date())
-            let font = NSFont.systemFont(ofSize: 13, weight: checked || isToday ? .semibold : .regular)
+            // 有学习记录的格子：数字上移，底部补一行时长（45m / 2h）
+            let hasStudy = minutes > 0
+            let font = NSFont.systemFont(ofSize: hasStudy ? 12 : 13,
+                                         weight: checked || isToday ? .semibold : .regular)
             let str = ToolStyle.text("\(day)", font: font, color: numberColor.withAlphaComponent(alpha))
             let size = str.size()
-            str.draw(at: NSPoint(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2))
+            let numY = hasStudy ? rect.midY + 4 - size.height / 2 : rect.midY - size.height / 2
+            str.draw(at: NSPoint(x: rect.midX - size.width / 2, y: numY))
+
+            if hasStudy {
+                let timeColor: NSColor
+                if checked {
+                    timeColor = StudyTier.onFill(tier).withAlphaComponent(0.78)
+                } else if isToday {
+                    timeColor = accent.withAlphaComponent(0.85)
+                } else {
+                    timeColor = StudyTier.text(tier)
+                }
+                let t = ToolStyle.text(StudyStore.compact(minutes: minutes),
+                                       font: NSFont.systemFont(ofSize: 8.5, weight: .medium),
+                                       color: timeColor.withAlphaComponent(alpha))
+                let ts = t.size()
+                t.draw(at: NSPoint(x: rect.midX - ts.width / 2, y: rect.minY + 4))
+            }
         }
     }
 
@@ -466,29 +596,7 @@ final class CheckInCalendarView: NSView {
         NSColor.separatorColor.setFill()
         separatorRect.fill()
 
-        // 左侧：连续天数（统计块锚定底部：第二行小字在下，大数字在上）
-        let numFont = ToolStyle.rounded(28, .semibold)
-        let unitFont = NSFont.systemFont(ofSize: 12)
-        let num = ToolStyle.text("\(stats.current)", font: numFont, color: .labelColor)
-        let unit = ToolStyle.text(" 天", font: unitFont, color: .secondaryLabelColor)
-        let numSize = num.size()
-        let numY = statsBlockBottom + 18
-        num.draw(at: NSPoint(x: sidePad, y: numY))
-        unit.draw(at: NSPoint(x: sidePad + numSize.width + 2, y: numY + 4))
-
-        // 第二行：选中日期状态优先，否则显示最长/累计
-        let subFont = NSFont.systemFont(ofSize: 11)
-        let subText: String
-        if let sel = selectedKey {
-            let state = store.isChecked(sel) ? "已打卡" : (sel == todayKey ? "今天 · 未打卡" : "未打卡")
-            subText = "\(DayKey.dayTitle(sel)) · \(state)"
-        } else {
-            subText = "最长 \(stats.best) 天 · 累计 \(stats.total) 天"
-        }
-        ToolStyle.text(subText, font: subFont, color: .secondaryLabelColor)
-            .draw(at: NSPoint(x: sidePad, y: statsBlockBottom + 1))
-
-        // 右下主按钮
+        // 右侧按钮先画，第二行文字在它下方，不会互相压住
         let checked = store.checkedToday
         let fill = checked ? accent.withAlphaComponent(0.28) : accent
         fill.setFill()
@@ -499,6 +607,35 @@ final class CheckInCalendarView: NSView {
             NSBezierPath(roundedRect: buttonRect, xRadius: 16, yRadius: 16).fill()
         }
 
+        // 左侧：连续天数
+        let numFont = ToolStyle.rounded(28, .semibold)
+        let unitFont = NSFont.systemFont(ofSize: 12)
+        let num = ToolStyle.text("\(stats.current)", font: numFont, color: .labelColor)
+        let unit = ToolStyle.text(" 天", font: unitFont, color: .secondaryLabelColor)
+        let numSize = num.size()
+        let numY = statsBlockBottom + 22
+        num.draw(at: NSPoint(x: sidePad, y: numY))
+        unit.draw(at: NSPoint(x: sidePad + numSize.width + 2, y: numY + 4))
+
+        // 第二行：选中日期优先（带上当天学习时长），否则显示最长/累计 + 累计学习
+        let subFont = NSFont.systemFont(ofSize: 11)
+        let subText: String
+        if let sel = selectedKey {
+            let state = store.isChecked(sel) ? "已打卡" : (sel == todayKey ? "今天 · 未打卡" : "未打卡")
+            let studied = study.seconds(for: sel)
+            subText = studied >= 60
+                ? "\(DayKey.dayTitle(sel)) · \(state) · 学习 \(StudyStore.format(studied))"
+                : "\(DayKey.dayTitle(sel)) · \(state)"
+        } else {
+            var text = "最长 \(stats.best) 天 · 累计 \(stats.total) 天"
+            let total = study.totalSeconds
+            if total >= 60 { text += " · 共学习 \(StudyStore.format(total))" }
+            subText = text
+        }
+        ToolStyle.text(subText, font: subFont, color: .secondaryLabelColor)
+            .draw(at: NSPoint(x: sidePad, y: statsBlockBottom + 4))
+
+        // 按钮文字
         let title = checked ? "已打卡 ✓" : "今天打卡"
         let font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         let color = checked ? NSColor.secondaryLabelColor : ToolStyle.onAccent
@@ -532,10 +669,13 @@ final class CheckInCalendarView: NSView {
         let p = convert(event.locationInWindow, from: nil)
         let k = key(at: p)
         let inButton = buttonRect.contains(p)
+        let inStrip = stripButtonRect.contains(p)
         let arrow: Int = prevRect.contains(p) ? -1 : (nextRect.contains(p) ? 1 : 0)
-        if k != hoveredKey || inButton != hoveredButton || arrow != hoveredArrow {
+        if k != hoveredKey || inButton != hoveredButton || arrow != hoveredArrow
+            || inStrip != hoveredStripButton {
             hoveredKey = k
             hoveredButton = inButton
+            hoveredStripButton = inStrip
             hoveredArrow = arrow
             needsDisplay = true
         }
@@ -544,12 +684,21 @@ final class CheckInCalendarView: NSView {
     override func mouseExited(with event: NSEvent) {
         hoveredKey = nil
         hoveredButton = false
+        hoveredStripButton = false
         hoveredArrow = 0
         needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
+
+        // 学习计时开关
+        if stripButtonRect.contains(p) {
+            study.toggle()
+            syncStudyTimer()
+            needsDisplay = true
+            return
+        }
 
         if buttonRect.contains(p) {
             guard !store.checkedToday else { return }

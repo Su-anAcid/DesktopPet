@@ -43,7 +43,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         case countdown = 1
     }
 
-    static let panelSize = NSSize(width: 320, height: 400)
+    static let panelSize = NSSize(width: 320, height: 448)
 
     private let window: NSPanel
     private let container: ToolsContentView
@@ -55,6 +55,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
 
     let checkInStore: CheckInStore
     let countdownStore: CountdownStore
+    let studyStore: StudyStore
 
     /// 主色跟随当前毛色（由 PetController 注入）
     var accentProvider: () -> NSColor = { .controlAccentColor }
@@ -68,10 +69,11 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     private var suppressAutoClose = false
     private var isShowing = false
 
-    init(checkInStore: CheckInStore, countdownStore: CountdownStore) {
+    init(checkInStore: CheckInStore, countdownStore: CountdownStore, studyStore: StudyStore) {
         self.checkInStore = checkInStore
         self.countdownStore = countdownStore
-        self.calendarView = CheckInCalendarView(store: checkInStore)
+        self.studyStore = studyStore
+        self.calendarView = CheckInCalendarView(store: checkInStore, study: studyStore)
         self.countdownView = CountdownListView(store: countdownStore)
 
         window = NSPanel(contentRect: NSRect(origin: .zero, size: Self.panelSize),
@@ -342,6 +344,8 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     // MARK: NSWindowDelegate
     func windowDidResignKey(_ notification: Notification) {
         guard isShowing, !suppressAutoClose else { return }
+        // 调试钩子打开的面板不自动关，方便自动化截图验收
+        if ProcessInfo.processInfo.environment["DESKTOPPET_OPEN_TOOLS"] != nil { return }
         close()
     }
 }

@@ -90,7 +90,8 @@ enum PrefKey {
     static let checkinDates = "checkinDates"
     static let countdownEvents = "countdownEvents"
     static let toolTab = "toolTab"
-    static let countdownNotifiedDay = "countdownNotifiedDay"
+    static let countdownBubbleDay = "countdownBubbleDay"
+    static let studySeconds = "studySeconds"
 }
 
 // MARK: - 开机自动启动（LaunchAgent）
@@ -157,12 +158,14 @@ final class PetController: NSObject {
     private var statusItem: NSStatusItem?
     private var isPetHidden = false
 
-    // 小工具：打卡日历 + 事件倒计时
+    // 小工具：打卡日历 + 事件倒计时 + 学习计时
     let checkInStore = CheckInStore()
     let countdownStore = CountdownStore()
+    let studyStore = StudyStore()
     private var toolsPanel: ToolsPanelController?
     private var cachedDayKey = DayKey.todayKey()
-    private var notifiedDay = UserDefaults.standard.string(forKey: PrefKey.countdownNotifiedDay) ?? ""
+    private var bubbleShownDay = UserDefaults.standard.string(forKey: PrefKey.countdownBubbleDay) ?? ""
+    private var countdownBubble: CountdownBubble?
 
     // 过渡动画时间轴
     private var transSeq: [(String, Int)] = []
@@ -201,6 +204,7 @@ final class PetController: NSObject {
         setupPanel()
         NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification,
                                                object: nil, queue: .main) { [weak self] _ in
+            self?.studyStore.pause()     // 结算最后一段学习时间并落盘
             self?.savePrefs()
         }
     }
@@ -282,6 +286,13 @@ final class PetController: NSObject {
             }
         }
 
+        // 开机先让猫说句话：报一下最近的那个日子（每天最多一次）
+        // DESKTOPPET_SHOW_BUBBLE=1 可强制立即说话，方便自测
+        let forceBubble = ProcessInfo.processInfo.environment["DESKTOPPET_SHOW_BUBBLE"] != nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + (forceBubble ? 1.0 : 3.0)) { [weak self] in
+            self?.maybeShowCountdownBubble(force: forceBubble)
+        }
+
         // 防止 App Nap 节流动画
         ProcessInfo.processInfo.beginActivity(options: .userInitiated,
                                               reason: "DesktopPet animation")
@@ -350,6 +361,9 @@ final class PetController: NSObject {
         if state == .walking { moveStep() }
         if state == .sleeping && tickCount % 110 == 0 { spawnZ() }
 
+        // 学习计时：主循环驱动，休眠/卡顿后的时间跳变会被 tick 内部削掉
+        studyStore.tick()
+
         if state == .transition {
             advanceTransition()
         } else if ticksLeft <= 0 {
@@ -359,7 +373,12 @@ final class PetController: NSObject {
         // 每 30 帧（约 1 秒）检查一次跨天与今日事件提醒
         if tickCount % 30 == 0 {
             refreshDayIfNeeded()
-            remindTodayEventsIfNeeded()
+            maybeShowCountdownBubble(force: false)
+        }
+
+        // 猫在散步时气泡跟着走（10Hz 足够，不必每帧挪窗口）
+        if tickCount % 3 == 0, countdownBubble?.isVisible == true {
+            countdownBubble?.reposition(near: catRectOnScreen())
         }
 
         updateImage()
@@ -595,6 +614,11 @@ final class PetController: NSObject {
         statusCountdown.target = self
         menu.addItem(statusCountdown)
 
+        let statusBubble = NSMenuItem(title: "提醒一下倒计时", action: #selector(showCountdownBubbleNow), keyEquivalent: "")
+        statusBubble.target = self
+        statusBubble.isEnabled = !countdownStore.upcoming().isEmpty
+        menu.addItem(statusBubble)
+
         menu.addItem(.separator())
 
         let sleep = NSMenuItem(title: state == .sleeping ? "唤醒猫咪" : "让猫咪睡觉",
@@ -665,6 +689,7 @@ final class PetController: NSObject {
     @objc private func togglePetVisible() {
         isPetHidden.toggle()
         if isPetHidden {
+            countdownBubble?.dismiss()
             panel.orderOut(nil)
         } else {
             panel.makeKeyAndOrderFront(nil)
@@ -682,7 +707,9 @@ final class PetController: NSObject {
 
     // MARK: 小工具（打卡日历 / 事件倒计时）
     private func makeToolsPanel() -> ToolsPanelController {
-        let c = ToolsPanelController(checkInStore: checkInStore, countdownStore: countdownStore)
+        let c = ToolsPanelController(checkInStore: checkInStore,
+                                     countdownStore: countdownStore,
+                                     studyStore: studyStore)
         c.accentProvider = { [weak self] in
             guard let self else { return .controlAccentColor }
             return ToolStyle.accent(from: petPalettes[self.paletteIndex].colors["g"])
@@ -699,18 +726,24 @@ final class PetController: NSObject {
             self?.spawnParticles("今天已经打过卡啦", count: 1)
         }
         c.onEventsChanged = { [weak self] in
-            // 新增的事件如果就在今天，让猫提醒一次
-            self?.notifiedDay = ""
-            self?.remindTodayEventsIfNeeded()
+            // 刚记下一个日子，让猫立刻念一遍
+            self?.maybeShowCountdownBubble(force: true)
         }
         return c
     }
 
+    private func openToolsPanel(tab: ToolsPanelController.Tab) {
+        let controller = toolsPanel ?? makeToolsPanel()
+        toolsPanel = controller
+        controller.show(tab: tab, near: panel.frame)
+    }
+
     @objc private func openTools(_ sender: NSMenuItem) {
-        let panelController = toolsPanel ?? makeToolsPanel()
-        toolsPanel = panelController
-        let tab = ToolsPanelController.Tab(rawValue: sender.tag) ?? .checkIn
-        panelController.show(tab: tab, near: panel.frame)
+        openToolsPanel(tab: ToolsPanelController.Tab(rawValue: sender.tag) ?? .checkIn)
+    }
+
+    @objc private func showCountdownBubbleNow() {
+        maybeShowCountdownBubble(force: true)
     }
 
     /// 工具面板的情绪反馈入口：只叠加爱心与粒子，不打断当前动作
@@ -731,15 +764,46 @@ final class PetController: NSObject {
         toolsPanel?.refreshForNewDay()
     }
 
-    /// 今天有事件 → 只提醒一次
-    private func remindTodayEventsIfNeeded() {
+    // MARK: 倒计时气泡
+    /// 猫在屏幕上的矩形（取猫的绘制区域，不含窗口上下留给粒子的空白）
+    private func catRectOnScreen() -> NSRect {
+        let pf = panel.frame
+        let pv = petView.frame
+        return NSRect(x: pf.minX + pv.minX, y: pf.minY + pv.minY,
+                      width: pv.width, height: pv.height)
+    }
+
+    /// 让猫张嘴说一句倒计时。每天主动说一次；force = 用户手动点 / 刚添加了事件
+    private func maybeShowCountdownBubble(force: Bool) {
+        let rows = countdownStore.upcoming()
+        guard let first = rows.first else { return }
         let today = DayKey.todayKey()
-        guard notifiedDay != today else { return }
-        let titles = countdownStore.todayEvents().map { $0.title }
-        guard let first = titles.first else { return }
-        notifiedDay = today
-        UserDefaults.standard.set(today, forKey: PrefKey.countdownNotifiedDay)
-        spawnParticles("今天：\(first)", count: 1)
+        if !force && bubbleShownDay == today { return }
+        bubbleShownDay = today
+        UserDefaults.standard.set(today, forKey: PrefKey.countdownBubbleDay)
+
+        let message: String
+        switch first.days {
+        case 0: message = "「\(first.event.title)」就是今天！"
+        case 1: message = "「\(first.event.title)」就是明天"
+        default: message = "距离「\(first.event.title)」还有 \(first.days) 天"
+        }
+        let hint = rows.count > 1 ? "点我看看另外 \(rows.count - 1) 个日子" : "点我打开倒计时"
+
+        let bubble: CountdownBubble
+        if let existing = countdownBubble {
+            bubble = existing
+        } else {
+            let fresh = CountdownBubble()
+            fresh.onClick = { [weak self] in self?.openToolsPanel(tab: .countdown) }
+            countdownBubble = fresh
+            bubble = fresh
+        }
+        bubble.show(title: "倒计时提醒",
+                    message: message,
+                    hint: hint,
+                    accent: ToolStyle.accent(from: petPalettes[paletteIndex].colors["g"]),
+                    near: catRectOnScreen())
     }
 
     // MARK: 右键菜单
@@ -812,6 +876,11 @@ final class PetController: NSObject {
         countdownItem.tag = ToolsPanelController.Tab.countdown.rawValue
         countdownItem.target = self
         menu.addItem(countdownItem)
+
+        let bubbleItem = NSMenuItem(title: "提醒一下倒计时", action: #selector(showCountdownBubbleNow), keyEquivalent: "")
+        bubbleItem.target = self
+        bubbleItem.isEnabled = !countdownStore.upcoming().isEmpty
+        menu.addItem(bubbleItem)
         menu.addItem(.separator())
 
         // 行为
