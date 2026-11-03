@@ -59,6 +59,13 @@ enum DayKey {
         let c = Calendar.current.dateComponents([.month, .day], from: d)
         return "\(c.month ?? 0) 月 \(c.day ?? 0) 日"
     }
+
+    /// 带年份的完整写法：「2026 年 11 月 3 日」
+    static func fullTitle(_ key: String) -> String {
+        guard let d = parse(key) else { return key }
+        let c = Calendar.current.dateComponents([.year, .month, .day], from: d)
+        return "\(c.year ?? 0) 年 \(c.month ?? 0) 月 \(c.day ?? 0) 日"
+    }
 }
 
 // MARK: - 统计
@@ -400,7 +407,7 @@ final class CheckInCalendarView: NSView {
         NSBezierPath(roundedRect: stripRect, xRadius: 10, yRadius: 10).fill()
 
         let running = study.isRunning
-        let label = ToolStyle.text("今日学习", font: NSFont.systemFont(ofSize: 11),
+        let label = ToolStyle.text("今日打卡", font: NSFont.systemFont(ofSize: 11),
                                    color: .secondaryLabelColor)
         let labelSize = label.size()
         label.draw(at: NSPoint(x: stripRect.minX + 12, y: stripRect.midY - labelSize.height / 2))
@@ -624,12 +631,12 @@ final class CheckInCalendarView: NSView {
             let state = store.isChecked(sel) ? "已打卡" : (sel == todayKey ? "今天 · 未打卡" : "未打卡")
             let studied = study.seconds(for: sel)
             subText = studied >= 60
-                ? "\(DayKey.dayTitle(sel)) · \(state) · 学习 \(StudyStore.format(studied))"
+                ? "\(DayKey.dayTitle(sel)) · \(state) · 打卡 \(StudyStore.format(studied))"
                 : "\(DayKey.dayTitle(sel)) · \(state)"
         } else {
             var text = "最长 \(stats.best) 天 · 累计 \(stats.total) 天"
             let total = study.totalSeconds
-            if total >= 60 { text += " · 共学习 \(StudyStore.format(total))" }
+            if total >= 60 { text += " · 共打卡 \(StudyStore.format(total))" }
             subText = text
         }
         ToolStyle.text(subText, font: subFont, color: .secondaryLabelColor)

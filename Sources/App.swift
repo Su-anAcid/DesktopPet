@@ -165,7 +165,7 @@ final class PetController: NSObject {
     private var statusItem: NSStatusItem?
     private var isPetHidden = false
 
-    // 小工具：打卡日历 + 事件倒计时 + 学习计时
+    // 小工具：打卡日历 + 未来倒计时 + 打卡计时
     let checkInStore = CheckInStore()
     let countdownStore = CountdownStore()
     let studyStore = StudyStore()
@@ -399,7 +399,7 @@ final class PetController: NSObject {
         if state == .walking { moveStep() }
         if state == .sleeping && tickCount % 110 == 0 { spawnZ() }
 
-        // 学习计时：主循环驱动，休眠/卡顿后的时间跳变会被 tick 内部削掉
+        // 打卡计时：主循环驱动，休眠/卡顿后的时间跳变会被 tick 内部削掉
         if studyStore.isRunning && !studyWasRunning {
             // 开始（或从暂停恢复）：按当前进度对齐到间隔网格，避免一恢复就立刻播报
             let step = max(60, reminderSettings.studyIntervalMinutes * 60)
@@ -654,12 +654,12 @@ final class PetController: NSObject {
         statusCheckIn.target = self
         menu.addItem(statusCheckIn)
 
-        let statusCountdown = NSMenuItem(title: "事件倒计时…", action: #selector(openTools(_:)), keyEquivalent: "")
+        let statusCountdown = NSMenuItem(title: "未来倒计时…", action: #selector(openTools(_:)), keyEquivalent: "")
         statusCountdown.tag = ToolsPanelController.Tab.countdown.rawValue
         statusCountdown.target = self
         menu.addItem(statusCountdown)
 
-        let statusBubble = NSMenuItem(title: "提醒一下倒计时", action: #selector(showCountdownBubbleNow), keyEquivalent: "")
+        let statusBubble = NSMenuItem(title: "提醒一下未来倒计时", action: #selector(showCountdownBubbleNow), keyEquivalent: "")
         statusBubble.target = self
         statusBubble.isEnabled = !countdownStore.upcoming().isEmpty
         menu.addItem(statusBubble)
@@ -772,11 +772,11 @@ final class PetController: NSObject {
             if [1, 3, 7, 14, 21, 30, 50, 100, 200, 365].contains(streak) {
                 self.spawnParticles("连续 \(streak) 天！", count: 1)
             }
-            // 打卡时把「今天学了多久」一起说出来（跟着学习提醒的开关走）
+            // 打卡时把「今天打了多久」一起说出来（跟着打卡提醒的开关走）
             let studied = self.studyStore.todaySeconds
             if self.reminderSettings.studyEnabled, studied >= 60 {
                 self.presentBubble(title: "今日打卡",
-                                   message: "今天已经学习 \(StudyStore.format(studied)) 了",
+                                   message: "今天已经打卡 \(StudyStore.format(studied)) 了",
                                    hint: "连续 \(streak) 天 · 点我看看日历",
                                    tab: .checkIn)
             }
@@ -862,9 +862,9 @@ final class PetController: NSObject {
         case 1: message = "「\(first.event.title)」就是明天"
         default: message = "距离「\(first.event.title)」还有 \(first.days) 天"
         }
-        let hint = rows.count > 1 ? "点我看看另外 \(rows.count - 1) 个日子" : "点我打开倒计时"
+        let hint = rows.count > 1 ? "点我看看另外 \(rows.count - 1) 个日子" : "点我打开未来倒计时"
 
-        presentBubble(title: "倒计时提醒", message: message, hint: hint, tab: .countdown)
+        presentBubble(title: "未来倒计时提醒", message: message, hint: hint, tab: .countdown)
     }
 
     /// 学习计时中按间隔播报「已经学了多久」
@@ -879,9 +879,9 @@ final class PetController: NSObject {
         studyAnnounceBase = now
 
         let message = now >= 3600
-            ? "已经学习 \(StudyStore.format(now)) 了，起来走两步？"
-            : "已经学习 \(StudyStore.format(now)) 啦，再接再厉"
-        presentBubble(title: "学习计时", message: message,
+            ? "已经打卡 \(StudyStore.format(now)) 了，起来走两步？"
+            : "已经打卡 \(StudyStore.format(now)) 啦，再接再厉"
+        presentBubble(title: "打卡计时", message: message,
                       hint: "点我打开打卡日历", tab: .checkIn)
     }
 
@@ -985,12 +985,12 @@ final class PetController: NSObject {
         • 右键：打开或收起小工具面板（回到上次看的标签页）
 
         【小工具面板】面板顶部切换三个标签
-        • 打卡：每天点一次「今天打卡」，猫会开心，月历留痕并统计连续天数；顶部「开始 / 暂停」记录学习时长，日历格子按时长深浅着色
-        • 倒计时：记下生日、上线、考试等日子，支持每年重复，按剩余天数排序
-        • 提醒：倒计时播报开关、开始提醒的范围（不限制 / 提前 30 天 / 提前 7 天 / 仅当天）、提醒间隔（30 分钟 / 1 小时 / 每天 / 每 3 天或自定义）；学习计时中每过 5 / 10 / 15 / 30 分钟或自定义间隔，猫会冒气泡播报「已经学习了多久」
+        • 打卡：每天点一次「今天打卡」，猫会开心，月历留痕并统计连续天数；顶部「开始 / 暂停」记录打卡时长，日历格子按时长深浅着色
+        • 未来倒计时：记下生日、上线、考试等日子（列表里显示完整年月日），支持每年重复，按剩余天数排序；鼠标移到某一行，右侧出现铅笔（编辑）和 ×（删除，会先确认一次）
+        • 提醒：未来倒计时播报开关、开始提醒的范围（不限制 / 提前 30 天 / 提前 7 天 / 仅当天）、提醒间隔（30 分钟 / 1 小时 / 每天 / 每 3 天或自定义）；打卡计时中每过 5 / 10 / 15 / 30 分钟或自定义间隔，猫会冒气泡播报「已经打卡了多久」
 
         【其余设置】点菜单栏的猫头图标
-        显示 / 隐藏猫咪、回到桌面右下角、打卡日历 / 事件倒计时 / 提醒一下倒计时 / 提醒设置、睡觉 / 唤醒、固定位置、坐下前舔爪子、开机自动启动、外观（毛色 / 大小 / 过渡节奏）、关于、退出
+        显示 / 隐藏猫咪、回到桌面右下角、打卡日历 / 未来倒计时 / 提醒一下未来倒计时 / 提醒设置、睡觉 / 唤醒、固定位置、坐下前舔爪子、开机自动启动、外观（毛色 / 大小 / 过渡节奏）、关于、退出
 
         所有数据只存在本机（UserDefaults），不上传。
 

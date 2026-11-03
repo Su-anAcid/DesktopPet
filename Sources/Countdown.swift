@@ -43,10 +43,31 @@ final class CountdownStore {
         events.contains { $0.title == title && $0.dateKey == dateKey }
     }
 
+    /// 编辑时查重：忽略自己
+    func contains(title: String, dateKey: String, excluding id: UUID) -> Bool {
+        events.contains { $0.id != id && $0.title == title && $0.dateKey == dateKey }
+    }
+
+    func event(id: UUID) -> CountdownEvent? {
+        events.first { $0.id == id }
+    }
+
     @discardableResult
     func add(title: String, dateKey: String, yearly: Bool) -> Bool {
         guard !isFull, !contains(title: title, dateKey: dateKey) else { return false }
         events.append(CountdownEvent(title: title, dateKey: dateKey, yearly: yearly))
+        save()
+        return true
+    }
+
+    /// 原地修改；找不到 id 或与别的事件重复时返回 false
+    @discardableResult
+    func update(id: UUID, title: String, dateKey: String, yearly: Bool) -> Bool {
+        guard let i = events.firstIndex(where: { $0.id == id }) else { return false }
+        guard !contains(title: title, dateKey: dateKey, excluding: id) else { return false }
+        events[i].title = title
+        events[i].dateKey = dateKey
+        events[i].yearly = yearly
         save()
         return true
     }
@@ -120,25 +141,32 @@ final class CountdownStore {
 // MARK: - 行视图（滚动内容）
 private final class CountdownRowsView: NSView {
     var accent: NSColor = .controlAccentColor { didSet { needsDisplay = true } }
-    var onDelete: ((UUID) -> Void)?
+    /// 点击行尾按钮时只「提出请求」；真正的编辑 / 删除由面板负责（删除要二次确认）
+    var onRequestEdit: ((UUID) -> Void)?
+    var onRequestDelete: ((UUID) -> Void)?
 
     private var rows: [(event: CountdownEvent, date: Date, days: Int)] = []
     private var hoveredIndex: Int?
-    private var hoveredDelete = false
-    private var removingId: UUID?
-    private var removalProgress: CGFloat = 0
-    private var fadeTimer: Timer?
+    private var hoveredAction: Int?          // 0 = 编辑 / 1 = 删除
 
     private let rowH: CGFloat = 52
     private let sidePad: CGFloat = 20
-    private let rightReserve: CGFloat = 34    // 给悬停删除按钮留位
+    private let iconSize: CGFloat = 16
+    private let iconStep: CGFloat = 22
+    /// 给悬停时才出现的「编辑 / 删除」两个按钮留位
+    private let rightReserve: CGFloat = 56
 
     override var isFlipped: Bool { true }
 
     func reload(_ rows: [(event: CountdownEvent, date: Date, days: Int)]) {
         self.rows = rows
         hoveredIndex = nil
-        hoveredDelete = false
+        hoveredAction = nil
+        // 调试钩子：强制显示第一行的操作图标，方便自动化截图验收
+        if ProcessInfo.processInfo.environment["DESKTOPPET_DEBUG_HOVER"] == "1", !rows.isEmpty {
+            hoveredIndex = 0
+            hoveredAction = 0
+        }
         invalidateIntrinsicContentSize()
         needsDisplay = true
     }
@@ -147,9 +175,11 @@ private final class CountdownRowsView: NSView {
         NSSize(width: NSView.noIntrinsicMetric, height: CGFloat(max(rows.count, 1)) * (rowH + 1))
     }
 
-    private func deleteRect(for index: Int) -> NSRect {
+    /// slot 0 = 编辑，slot 1 = 删除（都在行右端）
+    private func actionRect(for index: Int, slot: Int) -> NSRect {
         let y = CGFloat(index) * (rowH + 1)
-        return NSRect(x: bounds.width - sidePad - 16, y: y + rowH / 2 - 8, width: 16, height: 16)
+        let x = bounds.width - sidePad - CGFloat(2 - slot) * iconStep
+        return NSRect(x: x, y: y + rowH / 2 - iconSize / 2, width: iconSize, height: iconSize)
     }
 
     override func draw(_ dirtyRect: NSRect) {
@@ -159,13 +189,8 @@ private final class CountdownRowsView: NSView {
         for (i, row) in rows.enumerated() {
             let y = CGFloat(i) * (rowH + 1)
             let rowRect = NSRect(x: 0, y: y, width: bounds.width, height: rowH)
-            let isRemoving = row.event.id == removingId
-            let alpha = isRemoving ? (1 - removalProgress) : 1
 
             NSGraphicsContext.saveGraphicsState()
-            if alpha < 1 {
-                NSGraphicsContext.current?.cgContext.setAlpha(alpha)
-            }
 
             // 今天到期：整行主色 8% 底
             if row.days == 0 {
@@ -186,8 +211,8 @@ private final class CountdownRowsView: NSView {
                 .font: titleFont, .foregroundColor: titleColor, .paragraphStyle: para,
             ]).draw(in: titleRect)
 
-            // 日期小字
-            var dateText = DayKey.dayTitle(DayKey.key(for: row.date))
+            // 日期小字：完整年月日；每年重复的写的是「下一次」那天
+            var dateText = DayKey.fullTitle(DayKey.key(for: row.date))
             if row.event.yearly { dateText += " · 每年" }
             NSAttributedString(string: dateText, attributes: [
                 .font: dateFont, .foregroundColor: NSColor.secondaryLabelColor,
@@ -209,18 +234,22 @@ private final class CountdownRowsView: NSView {
                                          y: y + rowH / 2 - numSize.height / 2 + 5))
             }
 
-            // 悬停删除 ×
-            if hoveredIndex == i && !isRemoving {
-                let r = deleteRect(for: i)
+            // 悬停才出现的「编辑 / 删除」
+            if hoveredIndex == i {
+                let editR = actionRect(for: i, slot: 0)
+                drawPencil(in: editR,
+                           color: hoveredAction == 0 ? NSColor.labelColor : NSColor.tertiaryLabelColor)
+
+                let delR = actionRect(for: i, slot: 1)
                 let x = NSBezierPath()
                 let inset: CGFloat = 4
-                x.move(to: NSPoint(x: r.minX + inset, y: r.minY + inset))
-                x.line(to: NSPoint(x: r.maxX - inset, y: r.maxY - inset))
-                x.move(to: NSPoint(x: r.maxX - inset, y: r.minY + inset))
-                x.line(to: NSPoint(x: r.minX + inset, y: r.maxY - inset))
+                x.move(to: NSPoint(x: delR.minX + inset, y: delR.minY + inset))
+                x.line(to: NSPoint(x: delR.maxX - inset, y: delR.maxY - inset))
+                x.move(to: NSPoint(x: delR.maxX - inset, y: delR.minY + inset))
+                x.line(to: NSPoint(x: delR.minX + inset, y: delR.maxY - inset))
                 x.lineWidth = 1.2
                 x.lineCapStyle = .round
-                (hoveredDelete ? NSColor.labelColor : NSColor.tertiaryLabelColor).setStroke()
+                (hoveredAction == 1 ? NSColor.labelColor : NSColor.tertiaryLabelColor).setStroke()
                 x.stroke()
             }
 
@@ -243,6 +272,26 @@ private final class CountdownRowsView: NSView {
         }
     }
 
+    /// 一支斜着的小铅笔
+    private func drawPencil(in r: NSRect, color: NSColor) {
+        color.setStroke()
+        color.setFill()
+        // 笔杆
+        let body = NSBezierPath()
+        body.move(to: NSPoint(x: r.minX + 4.5, y: r.maxY - 3.5))
+        body.line(to: NSPoint(x: r.maxX - 3.5, y: r.minY + 4.5))
+        body.lineWidth = 2.4
+        body.lineCapStyle = .round
+        body.stroke()
+        // 笔尖
+        let tip = NSBezierPath()
+        tip.move(to: NSPoint(x: r.minX + 3.0, y: r.maxY - 3.0))
+        tip.line(to: NSPoint(x: r.minX + 7.4, y: r.maxY - 3.0))
+        tip.line(to: NSPoint(x: r.minX + 3.0, y: r.maxY - 7.4))
+        tip.close()
+        tip.fill()
+    }
+
     // MARK: 交互
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -259,52 +308,43 @@ private final class CountdownRowsView: NSView {
         return (i >= 0 && i < rows.count) ? i : nil
     }
 
+    /// 0 = 编辑 / 1 = 删除 / nil = 不在按钮上
+    private func action(at p: NSPoint, in index: Int) -> Int? {
+        if actionRect(for: index, slot: 0).contains(p) { return 0 }
+        if actionRect(for: index, slot: 1).contains(p) { return 1 }
+        return nil
+    }
+
     override func mouseMoved(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
         let i = index(at: p)
-        let onDelete = i.map { deleteRect(for: $0).contains(p) } ?? false
-        if i != hoveredIndex || onDelete != hoveredDelete {
+        let act = i.flatMap { action(at: p, in: $0) }
+        if i != hoveredIndex || act != hoveredAction {
             hoveredIndex = i
-            hoveredDelete = onDelete
+            hoveredAction = act
             needsDisplay = true
         }
     }
 
     override func mouseExited(with event: NSEvent) {
         hoveredIndex = nil
-        hoveredDelete = false
+        hoveredAction = nil
         needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        guard let i = index(at: p), deleteRect(for: i).contains(p) else { return }
+        guard let i = index(at: p), let act = action(at: p, in: i) else { return }
         let id = rows[i].event.id
-        fadeOutAndDelete(id: id)
-    }
-
-    /// 0.15s 淡出后从数据里删除
-    private func fadeOutAndDelete(id: UUID) {
-        removingId = id
-        removalProgress = 0
-        fadeTimer?.invalidate()
-        let start = Date()
-        fadeTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] t in
-            guard let self else { t.invalidate(); return }
-            let p = min(1, Date().timeIntervalSince(start) / 0.15)
-            self.removalProgress = p
-            self.needsDisplay = true
-            if p >= 1 {
-                t.invalidate()
-                self.removingId = nil
-                self.removalProgress = 0
-                self.onDelete?(id)
-            }
+        if act == 0 {
+            onRequestEdit?(id)
+        } else {
+            onRequestDelete?(id)
         }
     }
 }
 
-// MARK: - 倒计时列表（含滚动与底部添加按钮）
+// MARK: - 未来倒计时列表（含滚动与底部添加按钮）
 final class CountdownListView: NSView {
     var accent: NSColor = .controlAccentColor {
         didSet {
@@ -313,7 +353,10 @@ final class CountdownListView: NSView {
         }
     }
     var onAdd: (() -> Void)?
-    var onDelete: ((UUID) -> Void)?
+    /// 点铅笔：面板弹出编辑框
+    var onEdit: ((CountdownEvent) -> Void)?
+    /// 点 ×：面板先二次确认，确认后回调 `remove(id:)`
+    var onDelete: ((CountdownEvent) -> Void)?
 
     private let store: CountdownStore
     private let scroll = NSScrollView()
@@ -334,15 +377,23 @@ final class CountdownListView: NSView {
         scroll.documentView = rowsView
         addSubview(scroll)
 
-        rowsView.onDelete = { [weak self] id in
-            guard let self else { return }
-            self.store.remove(id: id)
-            self.reload()
-            self.onDelete?(id)
+        rowsView.onRequestEdit = { [weak self] id in
+            guard let self, let e = self.store.event(id: id) else { return }
+            self.onEdit?(e)
+        }
+        rowsView.onRequestDelete = { [weak self] id in
+            guard let self, let e = self.store.event(id: id) else { return }
+            self.onDelete?(e)
         }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// 确认删除后由面板调用
+    func remove(id: UUID) {
+        store.remove(id: id)
+        reload()
+    }
 
     func reload() {
         let rows = store.upcoming()
@@ -364,7 +415,7 @@ final class CountdownListView: NSView {
         let scale = ToolStyle.backingScale(self)
 
         if store.upcoming().isEmpty {
-            let str = ToolStyle.text("还没有倒计时事件", font: NSFont.systemFont(ofSize: 13),
+            let str = ToolStyle.text("还没有未来倒计时", font: NSFont.systemFont(ofSize: 13),
                                      color: .secondaryLabelColor)
             let size = str.size()
             // 空态文案放在滚动区中间

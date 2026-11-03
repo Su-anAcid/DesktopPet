@@ -33,7 +33,7 @@ final class ReminderSettings {
         /// 面板底部的解释文案
         var summary: String {
             switch self {
-            case .unlimited: return "只要有倒计时，猫就会念"
+            case .unlimited: return "只要有未来倒计时，猫就会念"
             case .sameDay: return "只在事件当天念一句"
             default: return "事件进入 \(limitDays ?? 0) 天内才开始念"
             }
@@ -300,8 +300,8 @@ final class ReminderSettingsView: NSView {
         computeLayout()
         let scale = ToolStyle.backingScale(self)
 
-        // ── 倒计时提醒
-        drawSection("倒计时提醒", at: cdHeaderY)
+        // ── 未来倒计时提醒
+        drawSection("未来倒计时提醒", at: cdHeaderY)
         drawToggle(cdToggleRect, on: settings.countdownEnabled)
         label("开启提醒", x: sidePad, y: cdToggleY + 3, size: 13, weight: .medium,
               color: .labelColor, enabled: true)
@@ -335,9 +335,9 @@ final class ReminderSettingsView: NSView {
               color: preview.1, enabled: true)
 
         // ── 学习时长提醒
-        drawSection("学习时长提醒", at: studyHeaderY)
+        drawSection("打卡时长提醒", at: studyHeaderY)
         drawToggle(studyToggleRect, on: settings.studyEnabled)
-        label("学习时播报", x: sidePad, y: studyToggleY + 3, size: 13, weight: .medium,
+        label("打卡时播报", x: sidePad, y: studyToggleY + 3, size: 13, weight: .medium,
               color: .labelColor, enabled: true)
 
         let stOn = settings.studyEnabled
@@ -358,7 +358,7 @@ final class ReminderSettingsView: NSView {
         }
 
         // ── 底部说明
-        let tip = "关闭后猫不再主动说话；菜单栏猫头图标里的「提醒一下倒计时」仍可手动播报。"
+        let tip = "关闭后猫不再主动说话；菜单栏猫头图标里的「提醒一下未来倒计时」仍可手动播报。"
         let para = NSMutableParagraphStyle()
         para.lineBreakMode = .byWordWrapping
         let attr = NSAttributedString(string: tip, attributes: [
@@ -377,7 +377,7 @@ final class ReminderSettingsView: NSView {
 
     private func previewText() -> (String, NSColor) {
         guard let first = store.upcoming().first else {
-            return ("还没有倒计时事件", .tertiaryLabelColor)
+            return ("还没有未来倒计时", .tertiaryLabelColor)
         }
         let base = "最近：\(first.event.title) · \(first.days == 0 ? "今天" : "\(first.days) 天后")"
         if !settings.countdownEnabled {

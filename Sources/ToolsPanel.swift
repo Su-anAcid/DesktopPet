@@ -89,7 +89,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
                          backing: .buffered, defer: false)
         container = ToolsContentView(frame: NSRect(origin: .zero, size: Self.panelSize))
         effect = NSVisualEffectView(frame: container.bounds)
-        segmented = NSSegmentedControl(labels: ["打卡", "倒计时", "提醒"],
+        segmented = NSSegmentedControl(labels: ["打卡", "未来倒计时", "提醒"],
                                        trackingMode: .selectOne, target: nil, action: nil)
         band = TodayBandView(frame: .zero)
 
@@ -143,12 +143,13 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
             self.shake()
             self.onDuplicate?()
         }
-        countdownView.onAdd = { [weak self] in self?.presentAddEvent() }
-        countdownView.onDelete = { [weak self] _ in self?.eventsChanged() }
+        countdownView.onAdd = { [weak self] in self?.presentEventForm(editing: nil) }
+        countdownView.onEdit = { [weak self] event in self?.presentEventForm(editing: event) }
+        countdownView.onDelete = { [weak self] event in self?.confirmDelete(event) }
         settingsView.onCustomStudyInterval = { [weak self] in
             self?.presentCustomInterval(
-                title: "自定义学习播报间隔",
-                note: "学习计时中，每过这么久猫就报一次已学时长（1–240 分钟）。",
+                title: "自定义打卡播报间隔",
+                note: "打卡计时中，每过这么久猫就报一次已打卡时长（1–240 分钟）。",
                 range: ReminderSettings.StudyInterval.minMinutes...ReminderSettings.StudyInterval.maxMinutes,
                 current: settings.studyIntervalMinutes
             ) { [weak self] minutes in
@@ -157,7 +158,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         }
         settingsView.onCustomCountdownInterval = { [weak self] in
             self?.presentCustomInterval(
-                title: "自定义倒计时播报间隔",
+                title: "自定义未来倒计时播报间隔",
                 note: "每隔这么久，猫就冒泡念一次最近的日子（5–43200 分钟，最长 30 天）。",
                 range: ReminderSettings.CountdownInterval.minMinutes...ReminderSettings.CountdownInterval.maxMinutes,
                 current: settings.countdownIntervalMinutes
@@ -213,7 +214,7 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
     private func layoutContent() {
         let b = container.bounds
         let segH: CGFloat = 28
-        let segW: CGFloat = 208
+        let segW: CGFloat = 236
         segmented.frame = NSRect(x: (b.width - segW) / 2, y: b.height - 8 - segH,
                                  width: segW, height: segH)
 
@@ -310,14 +311,18 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         }
     }
 
-    // MARK: 添加事件
-    private func presentAddEvent() {
-        guard !countdownStore.isFull else { return }
+    // MARK: 添加 / 编辑事件
+    /// editing == nil 是新建，否则是编辑已有事件（表单预填原值）
+    private func presentEventForm(editing: CountdownEvent?) {
+        if editing == nil && countdownStore.isFull { return }
+        let isEdit = editing != nil
 
         let alert = NSAlert()
-        alert.messageText = "添加倒计时事件"
-        alert.informativeText = "记下一个未来的日子，猫会帮你数着。"
-        alert.addButton(withTitle: "添加")
+        alert.messageText = isEdit ? "编辑未来倒计时" : "添加未来倒计时"
+        alert.informativeText = isEdit
+            ? "改完点保存，猫会按新的日子重新数。"
+            : "记下一个未来的日子，猫会帮你数着。"
+        alert.addButton(withTitle: isEdit ? "保存" : "添加")
         alert.addButton(withTitle: "取消")
 
         let stack = NSStackView()
@@ -328,16 +333,22 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 240, height: 24))
         field.placeholderString = "例如：妈妈的生日"
         field.font = NSFont.systemFont(ofSize: 13)
+        field.stringValue = editing?.title ?? ""
 
         let picker = NSDatePicker()
         picker.datePickerStyle = .textFieldAndStepper
         picker.datePickerElements = [.yearMonthDay]
-        picker.dateValue = DayKey.today()
-        picker.minDate = DayKey.today()
         picker.font = NSFont.systemFont(ofSize: 13)
+        if let e = editing, let d = DayKey.parse(e.dateKey) {
+            picker.dateValue = d          // 每年重复的老事件可能是很多年前，编辑时不再限制下限
+        } else {
+            picker.dateValue = DayKey.today()
+            picker.minDate = DayKey.today()
+        }
 
         let check = NSButton(checkboxWithTitle: "每年重复", target: nil, action: nil)
         check.font = NSFont.systemFont(ofSize: 12)
+        check.state = (editing?.yearly ?? false) ? .on : .off
 
         stack.addArrangedSubview(field)
         stack.addArrangedSubview(picker)
@@ -365,17 +376,45 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
                 continue
             }
             let key = DayKey.key(for: picker.dateValue)
-            guard !countdownStore.contains(title: title, dateKey: key) else {
+            let duplicate = isEdit
+                ? countdownStore.contains(title: title, dateKey: key, excluding: editing!.id)
+                : countdownStore.contains(title: title, dateKey: key)
+            guard !duplicate else {
                 alert.informativeText = "这个事件已经有了"
                 continue
             }
 
-            countdownStore.add(title: title, dateKey: key, yearly: check.state == .on)
+            if let e = editing {
+                guard countdownStore.update(id: e.id, title: title,
+                                            dateKey: key, yearly: check.state == .on) else { return }
+            } else {
+                guard countdownStore.add(title: title, dateKey: key,
+                                         yearly: check.state == .on) else { return }
+            }
             countdownView.reload()
             updateBand()
             eventsChanged()
             return
         }
+    }
+
+    /// 删除要二次确认：默认按钮是「取消」，避免回车误删
+    private func confirmDelete(_ event: CountdownEvent) {
+        NSApp.activate(ignoringOtherApps: true)
+        suppressAutoClose = true
+        defer { suppressAutoClose = false }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "删除「\(event.title)」？"
+        alert.informativeText = "\(DayKey.fullTitle(event.dateKey))\(event.yearly ? " · 每年重复" : "")\n删除后就不再提醒了。"
+        alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: "删除")
+
+        guard alert.runModal() == .alertSecondButtonReturn else { return }
+        countdownView.remove(id: event.id)
+        updateBand()
+        eventsChanged()
     }
 
     private func eventsChanged() {
