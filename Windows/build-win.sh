@@ -13,6 +13,10 @@ if ! command -v "$CXX" >/dev/null 2>&1; then
   echo "找不到 $CXX（需要 mingw-w64 工具链）" >&2
   exit 1
 fi
+if ! command -v "$WINDRES" >/dev/null 2>&1; then
+  echo "找不到 $WINDRES（需要 mingw-w64 的 binutils，例如 apt/msys2 的 binutils 包）" >&2
+  exit 1
+fi
 
 # ① 精灵帧：仓库里已有 assets/pet.dat；缺了才从 macOS 版绘制代码导出
 if [ ! -f assets/pet.dat ]; then
