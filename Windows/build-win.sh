@@ -1,40 +1,57 @@
 #!/bin/bash
-# 在 macOS 上交叉编译 Windows 版桌面宠物
-# 依赖二选一：
-#   A) brew install mingw-w64            （走 windres 资源路线）
-#   B) zig 工具链                        （数据直接编进 exe，单文件）
+# 交叉编译 Windows 版桌面宠物
+# 依赖 mingw-w64（x86_64-w64-mingw32-g++ / windres）；macOS 上可用 llvm-mingw 的 bin 目录。
+# 精灵数据与图标已在仓库里，SKIP_EXPORT=1 时完全不需要 swift / node。
 set -e
 cd "$(dirname "$0")"
 
-ZIG=${ZIG:-$(command -v zig || true)}
+CXX=${CXX:-x86_64-w64-mingw32-g++}
+WINDRES=${WINDRES:-x86_64-w64-mingw32-windres}
+VERSION=${VERSION:-1.3.0}
 
-if [ "${SKIP_EXPORT:-0}" != "1" ] && command -v swiftc >/dev/null 2>&1; then
-  echo "① 从 macOS 版绘制代码导出精灵帧…"
-  swiftc ../Sources/SpriteData.swift tools/main.swift -o /tmp/exportpet
-  /tmp/exportpet assets/pet.dat
-else
-  echo "① 跳过精灵导出，直接使用仓库内 assets/pet.dat（SKIP_EXPORT=1 可强制跳过）"
-fi
-
-mkdir -p build
-
-if command -v x86_64-w64-mingw32-g++ >/dev/null 2>&1; then
-  echo "② mingw-w64：编译资源 + 可执行文件…"
-  x86_64-w64-mingw32-windres -I assets -i src/pet.rc -O coff -o /tmp/pet_res.o
-  x86_64-w64-mingw32-g++ -std=c++17 -O2 -mwindows -static -s \
-    -o build/DesktopPet.exe src/main.cpp /tmp/pet_res.o \
-    -lgdi32 -luser32 -lshell32
-elif [ -x "$ZIG" ]; then
-  echo "② zig：把帧数据编进 exe…"
-  node tools/embed.js assets/pet.dat src/pet_data.h
-  "$ZIG" c++ -target x86_64-windows-gnu -O2 -std=c++17 -DPET_EMBED \
-    -Wl,--subsystem,windows \
-    -o build/DesktopPet.exe src/main.cpp -lgdi32 -luser32 -lshell32
-else
-  echo "找不到 mingw-w64 或 zig，无法交叉编译"
+if ! command -v "$CXX" >/dev/null 2>&1; then
+  echo "找不到 $CXX（需要 mingw-w64 工具链）" >&2
   exit 1
 fi
 
+# ① 精灵帧：仓库里已有 assets/pet.dat；缺了才从 macOS 版绘制代码导出
+if [ ! -f assets/pet.dat ]; then
+  if command -v swiftc >/dev/null 2>&1; then
+    echo "▸ 导出精灵帧…"
+    mkdir -p build
+    swiftc ../Sources/SpriteData.swift tools/main.swift -o build/exportpet
+    ./build/exportpet assets/pet.dat
+  else
+    echo "缺少 assets/pet.dat 且没有 swiftc" >&2
+    exit 1
+  fi
+fi
+
+# ② 图标
+if [ ! -f assets/pet.ico ]; then
+  echo "▸ 生成 Windows 图标…"
+  python3 tools/make_ico.py
+fi
+
+# ③ 资源 + 可执行文件
+mkdir -p build
+echo "▸ 编译资源…"
+"$WINDRES" -I . -i src/pet.rc -O coff -o build/pet_res.o
+
+echo "▸ 编译可执行文件…"
+"$CXX" -std=c++17 -O2 -mwindows -DUNICODE -D_UNICODE -s \
+  -o build/DesktopPet.exe \
+  src/main.cpp src/store.cpp src/ui.cpp src/tools.cpp src/bubble.cpp \
+  build/pet_res.o \
+  -lgdiplus -lcomctl32 -lole32 -luuid -lshell32 -luser32 -lgdi32 -static-libgcc
+
+# ④ 打包
+rm -f "build/DesktopPet-${VERSION}-windows-x64.zip"
+if command -v zip >/dev/null 2>&1; then
+  (cd build && zip -q "DesktopPet-${VERSION}-windows-x64.zip" DesktopPet.exe)
+  echo "▸ 打包: $(pwd)/build/DesktopPet-${VERSION}-windows-x64.zip"
+fi
+
 ls -lh build/DesktopPet.exe
-file build/DesktopPet.exe
+file build/DesktopPet.exe 2>/dev/null || true
 echo "完成: $(pwd)/build/DesktopPet.exe"

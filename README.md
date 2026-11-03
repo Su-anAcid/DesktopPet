@@ -39,6 +39,7 @@
 | --- | --- |
 | `DesktopPet-x.x.x.dmg` | macOS 安装镜像（Apple Silicon + Intel 通用） |
 | `DesktopPet-x.x.x.zip` | macOS zip 备用渠道 |
+| `DesktopPet-x.x.x-windows-x64.zip` | Windows 版（解压即用的单文件 exe） |
 
 **安装步骤**：打开 dmg，把 🐱 DesktopPet 拖进 Applications，双击启动。
 
@@ -70,18 +71,27 @@ curl -fsSL https://raw.githubusercontent.com/Su-anAcid/DesktopPet/main/install.s
 
 ## 🪟 Windows 版
 
-单文件 `DesktopPet.exe`（约 800 KB，逐像素 alpha 分层窗口，仅依赖系统 DLL），功能与 macOS 版对齐。
+单文件 `DesktopPet.exe`（约 560 KB，Win32 + GDI+ 逐像素 alpha 分层窗口，不依赖任何运行时），**功能与 macOS 版完全对齐**：
+
+- 同一套像素猫：散步 / 发呆 / 睡觉 / 伸懒腰，舔爪子、爱心眼、Z 粒子
+- 小工具面板（右键点猫开合）：**打卡日历**（月历留痕、连续/最长/累计、按时长五档暖色着色）、**未来倒计时**（完整年月日、每年重复、行尾铅笔编辑 / × 删除并二次确认）、**提醒设置**（播报开关、提前范围、分钟级间隔、自定义）
+- 头顶气泡播报：未来倒计时 + 打卡时长，点气泡直达面板
+- 托盘猫头图标：显示/隐藏、回到右下角、三处小工具入口、睡觉、固定位置、舔爪子、开机自启、毛色/大小/节奏、关于、退出
+- 数据存在注册表 `HKCU\Software\DesktopPet`（与 macOS 的 UserDefaults 各自独立）
 
 获取方式二选一：
 
-1. 在仓库的 Release 或 Actions 产物中下载已编译好的 `DesktopPet.exe`；
-2. 自行编译（需要 zig 或 mingw-w64 + node，精灵数据已包含在仓库里）：
+1. 在 Release 里下载 `DesktopPet-x.x.x-windows-x64.zip`，解压双击即可；
+2. 自行编译（需要 mingw-w64 或 llvm-mingw，精灵数据与图标已包含在仓库里）：
 
    ```bash
    git clone https://github.com/Su-anAcid/DesktopPet.git
-   cd DesktopPet/Windows && SKIP_EXPORT=1 ./build-win.sh
-   # 产物: Windows/build/DesktopPet.exe
+   cd DesktopPet/Windows && ./build-win.sh
+   # 产物: Windows/build/DesktopPet.exe 与同名 zip
    ```
+
+   > 数据层（`Windows/src/store.cpp`）不依赖 windows.h，可直接在 macOS 上跑单测：
+   > `clang++ -std=c++17 -O1 -o /tmp/t Windows/tests/test_store.cpp Windows/src/store.cpp && /tmp/t`
 
 ## 🔨 从源码构建（macOS）
 
@@ -102,7 +112,11 @@ cd DesktopPet
 │   ├── App.swift          状态机 / 透明置顶窗口 / 菜单 / 设置持久化
 │   ├── IconGen.swift      应用图标生成器
 │   └── PromoGen.swift     README 宣传图生成器
-├── Windows/            Windows 版（Win32 C++，精灵数据编进 exe）
+├── Windows/            Windows 版（Win32 + GDI+ C++）
+│   ├── src/store.cpp      数据层（打卡 / 倒计时 / 时长 / 提醒设置，可单测）
+│   ├── src/tools.cpp      小工具面板（自绘日历 / 列表 / 设置）
+│   ├── src/bubble.cpp     对话气泡
+│   └── tests/test_store.cpp  数据层单测（macOS 上也能跑）
 ├── Support/Info.plist
 ├── docs/               图片素材
 └── .github/workflows   推送 vX.Y.Z tag 自动构建并发布 Release

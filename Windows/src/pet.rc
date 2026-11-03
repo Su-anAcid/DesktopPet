@@ -1,1 +1,31 @@
-101 RCDATA "../assets/pet.dat"
+#include <windows.h>
+
+// 精灵帧数据（由 macOS 版 SpriteData.swift 导出）
+101 RCDATA "assets/pet.dat"
+// 应用图标（由 iconset 打包，供 exe 与托盘使用）
+102 ICON "assets/pet.ico"
+
+1 VERSIONINFO
+FILEVERSION 1,3,0,0
+PRODUCTVERSION 1,3,0,0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "080404b0"
+        BEGIN
+            VALUE "CompanyName", "SuAnAcid"
+            VALUE "FileDescription", "桌面宠物"
+            VALUE "FileVersion", "1.3.0"
+            VALUE "InternalName", "DesktopPet"
+            VALUE "OriginalFilename", "DesktopPet.exe"
+            VALUE "ProductName", "DesktopPet"
+            VALUE "ProductVersion", "1.3.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x804, 1200
+    END
+END
