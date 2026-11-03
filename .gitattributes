@@ -1,0 +1,18 @@
+# 统一换行符：脚本类文件强制 LF，否则 Windows 上 checkout 成 CRLF 会让 bash 报 127
+* text=auto eol=lf
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.cpp  text eol=lf
+*.h    text eol=lf
+*.rc   text eol=lf
+*.plist text eol=lf
+
+# 二进制资源不要做任何转换
+*.icns binary
+*.ico  binary
+*.dat  binary
+*.png  binary
+*.dmg  binary
+*.zip  binary

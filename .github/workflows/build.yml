@@ -44,12 +44,26 @@ jobs:
       - name: Build & package
         shell: msys2 {0}
         run: |
-          # msys2 的 bash 认不出 D:\a\... 这种 Windows 路径，统一用相对路径（默认工作目录就是仓库根）
-          set -eux
+          # 注意：脚本必须是 LF 换行（见 .gitattributes），CRLF 会让 bash 报 127
+          set +e
           VERSION="${GITHUB_REF_NAME#v}"
           if [[ "$GITHUB_REF" != refs/tags/* ]]; then VERSION="dev"; fi
-          cd Windows
-          VERSION="$VERSION" bash ./build-win.sh
+          export VERSION
+          echo "VERSION=$VERSION  PWD=$(pwd)"
+          command -v x86_64-w64-mingw32-g++ || echo "!! 找不到 g++"
+          command -v x86_64-w64-mingw32-windres || echo "!! 找不到 windres"
+          cd Windows || exit 1
+          sed -i 's/\r$//' build-win.sh   # 万一 checkout 还是 CRLF，就地修掉
+          bash -x ./build-win.sh > /tmp/winbuild.log 2>&1
+          rc=$?
+          tail -n 40 /tmp/winbuild.log
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::build-win.sh 退出码 $rc"
+            tail -n 20 /tmp/winbuild.log | tr -d '\r' | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr '%' ' ')"
+            done
+          fi
+          exit "$rc"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
