@@ -149,6 +149,8 @@ final class PetController: NSObject {
     private var timer: Timer?
     private var lastBackingScale: CGFloat = 0
     private var savedOrigin: NSPoint?
+    private var statusItem: NSStatusItem?
+    private var isPetHidden = false
 
     // 过渡动画时间轴
     private var transSeq: [(String, Int)] = []
@@ -246,6 +248,7 @@ final class PetController: NSObject {
     }
 
     func start() {
+        setupStatusItem()
         lastBackingScale = backingScale
         if let o = savedOrigin, isOriginUsable(o) {
             setPanelOrigin(o)
@@ -524,6 +527,118 @@ final class PetController: NSObject {
         p.floatUp(in: panel.contentView ?? petView, from: NSPoint(x: x, y: pf.maxY + 6))
     }
 
+    // MARK: 菜单栏图标
+    /// 菜单栏常驻入口：猫被拖到角落、或窗口意外不在前台时，还能找到它并退出
+    private func setupStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = item.button {
+            button.image = StatusIcon.make()
+            button.toolTip = "桌面宠物"
+        }
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        menu.delegate = self          // 每次展开前重建，保证勾选状态是最新的
+        item.menu = menu
+        statusItem = item
+    }
+
+    private func makeStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+
+        let show = NSMenuItem(title: isPetHidden ? "显示猫咪" : "隐藏猫咪",
+                              action: #selector(togglePetVisible), keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+
+        let home = NSMenuItem(title: "回到桌面右下角", action: #selector(movePetHome), keyEquivalent: "")
+        home.target = self
+        menu.addItem(home)
+        menu.addItem(.separator())
+
+        let sleep = NSMenuItem(title: state == .sleeping ? "唤醒猫咪" : "让猫咪睡觉",
+                               action: #selector(toggleSleep), keyEquivalent: "")
+        sleep.target = self
+        menu.addItem(sleep)
+
+        let pin = NSMenuItem(title: "固定位置", action: #selector(togglePin), keyEquivalent: "")
+        pin.target = self
+        pin.state = isPinned ? .on : .off
+        menu.addItem(pin)
+
+        let lick = NSMenuItem(title: "坐下前舔爪子", action: #selector(toggleLick), keyEquivalent: "")
+        lick.target = self
+        lick.state = lickEnabled ? .on : .off
+        menu.addItem(lick)
+
+        let login = NSMenuItem(title: "开机自动启动", action: #selector(toggleLoginItem), keyEquivalent: "")
+        login.target = self
+        login.state = LoginItem.isEnabled ? .on : .off
+        login.isEnabled = LoginItem.isAvailable
+        menu.addItem(login)
+        menu.addItem(.separator())
+
+        // 毛色 / 大小 / 节奏收进子菜单，托盘菜单保持短
+        let look = NSMenuItem(title: "外观", action: nil, keyEquivalent: "")
+        let lookMenu = NSMenu()
+        lookMenu.autoenablesItems = false
+        for (i, p) in petPalettes.enumerated() {
+            let it = NSMenuItem(title: p.name, action: #selector(changePalette(_:)), keyEquivalent: "")
+            it.tag = i
+            it.target = self
+            it.state = i == paletteIndex ? .on : .off
+            lookMenu.addItem(it)
+        }
+        lookMenu.addItem(.separator())
+        for (i, name) in ["小", "中", "大"].enumerated() {
+            let it = NSMenuItem(title: "大小：\(name)", action: #selector(changeSize(_:)), keyEquivalent: "")
+            it.tag = i
+            it.target = self
+            it.state = i == sizeIndex ? .on : .off
+            lookMenu.addItem(it)
+        }
+        lookMenu.addItem(.separator())
+        for (i, name) in ["慢", "正常", "快"].enumerated() {
+            let it = NSMenuItem(title: "节奏：\(name)", action: #selector(changeTempo(_:)), keyEquivalent: "")
+            it.tag = i
+            it.target = self
+            it.state = i == tempoIndex ? .on : .off
+            lookMenu.addItem(it)
+        }
+        look.submenu = lookMenu
+        menu.addItem(look)
+        menu.addItem(.separator())
+
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        let about = NSMenuItem(title: "关于桌面宠物 \(version)", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+
+        let quit = NSMenuItem(title: "退出桌面宠物", action: #selector(quit), keyEquivalent: "q")
+        quit.keyEquivalentModifierMask = [.command]
+        quit.target = self
+        menu.addItem(quit)
+        return menu
+    }
+
+    @objc private func togglePetVisible() {
+        isPetHidden.toggle()
+        if isPetHidden {
+            panel.orderOut(nil)
+        } else {
+            panel.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    @objc private func movePetHome() {
+        positionAtBottomRight()
+        if isPetHidden {
+            isPetHidden = false
+            panel.makeKeyAndOrderFront(nil)
+        }
+        savePrefs()
+    }
+
     // MARK: 右键菜单
     private func addHeader(_ title: String, to menu: NSMenu) {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -687,6 +802,62 @@ final class PetController: NSObject {
             enter(.sleeping, for: Int.random(in: 300...700))
         }
         updateImage()
+    }
+}
+
+// MARK: - 菜单栏菜单刷新
+extension PetController: NSMenuDelegate {
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === statusItem?.menu else { return }
+        let fresh = makeStatusMenu()
+        let items = fresh.items
+        menu.removeAllItems()
+        for item in items {
+            fresh.removeItem(item)
+            menu.addItem(item)
+        }
+    }
+}
+
+// MARK: - 菜单栏图标（16×16 像素猫头，模板图自适应深浅色菜单栏）
+enum StatusIcon {
+    private static let art: [String] = [
+        "................",
+        "....##....##....",
+        "...####..####...",
+        "..############..",
+        "..############..",
+        ".##############.",
+        ".###..####..###.",
+        ".###..####..###.",
+        ".##############.",
+        ".##############.",
+        "..############..",
+        "..############..",
+        "...##########...",
+        "....########....",
+        "................",
+        "................",
+    ]
+
+    static func make() -> NSImage {
+        let cells = art.count
+        let side: CGFloat = 16
+        let img = NSImage(size: NSSize(width: side, height: side), flipped: false) { _ in
+            NSColor.black.setFill()
+            let step = side / CGFloat(cells)
+            for (row, line) in art.enumerated() {
+                for (col, ch) in line.enumerated() where ch == "#" {
+                    let r = CGRect(x: CGFloat(col) * step,
+                                   y: side - CGFloat(row + 1) * step,
+                                   width: step, height: step)
+                    r.fill()
+                }
+            }
+            return true
+        }
+        img.isTemplate = true      // 让菜单栏按明暗自动反色
+        return img
     }
 }
 

@@ -67,3 +67,9 @@ generateAppIcon()
 #if PROMO
 generatePromo()
 #endif
+
+#if SHARE
+generateShareCover()
+generateShareFeatures()
+generateShareProcess()
+#endif
