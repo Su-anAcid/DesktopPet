@@ -36,6 +36,7 @@ fi
 # ③ 资源 + 可执行文件
 mkdir -p build
 echo "▸ 编译资源…"
+"$CXX" --version | head -1 || true
 "$WINDRES" -I . -i src/pet.rc -O coff -o build/pet_res.o
 
 echo "▸ 编译可执行文件…"

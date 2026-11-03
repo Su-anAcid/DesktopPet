@@ -1277,15 +1277,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE, LPSTR, int) {
     ULONG_PTR gdiToken = 0;
     if (Gdiplus::GdiplusStartup(&gdiToken, &gdiInput, nullptr) != Gdiplus::Ok) return 1;
 
-    PetApp app;
     int code = 1;
-    if (app.init(hInst)) {
-        MSG msg;
-        while (GetMessageW(&msg, NULL, 0, 0) > 0) {
-            TranslateMessage(&msg);
-            DispatchMessageW(&msg);
+    {
+        // app 的 GDI+ 对象（Surface / Font）必须早于 GdiplusShutdown 释放
+        PetApp app;
+        if (app.init(hInst)) {
+            MSG msg;
+            while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            code = 0;
         }
-        code = 0;
     }
 
     Gdiplus::GdiplusShutdown(gdiToken);

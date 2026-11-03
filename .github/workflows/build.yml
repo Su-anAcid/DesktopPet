@@ -44,9 +44,11 @@ jobs:
       - name: Build & package
         shell: msys2 {0}
         run: |
-          cd "$GITHUB_WORKSPACE/Windows"
+          # msys2 的 bash 认不出 D:\a\... 这种 Windows 路径，统一用相对路径（默认工作目录就是仓库根）
+          set -eux
           VERSION="${GITHUB_REF_NAME#v}"
           if [[ "$GITHUB_REF" != refs/tags/* ]]; then VERSION="dev"; fi
+          cd Windows
           VERSION="$VERSION" bash ./build-win.sh
 
       - name: Upload artifacts
