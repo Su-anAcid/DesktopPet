@@ -47,7 +47,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/Windows"
           VERSION="${GITHUB_REF_NAME#v}"
           if [[ "$GITHUB_REF" != refs/tags/* ]]; then VERSION="dev"; fi
-          VERSION="$VERSION" ./build-win.sh
+          VERSION="$VERSION" bash ./build-win.sh
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

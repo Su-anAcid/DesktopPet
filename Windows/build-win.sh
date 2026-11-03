@@ -39,11 +39,11 @@ echo "▸ 编译资源…"
 "$WINDRES" -I . -i src/pet.rc -O coff -o build/pet_res.o
 
 echo "▸ 编译可执行文件…"
-"$CXX" -std=c++17 -O2 -mwindows -DUNICODE -D_UNICODE -s \
+"$CXX" -std=c++17 -O2 -mwindows -DUNICODE -D_UNICODE -static -s \
   -o build/DesktopPet.exe \
   src/main.cpp src/store.cpp src/ui.cpp src/tools.cpp src/bubble.cpp \
   build/pet_res.o \
-  -lgdiplus -lcomctl32 -lole32 -luuid -lshell32 -luser32 -lgdi32 -static-libgcc
+  -lgdiplus -lcomctl32 -lole32 -luuid -lshell32 -luser32 -lgdi32
 
 # ④ 打包
 rm -f "build/DesktopPet-${VERSION}-windows-x64.zip"

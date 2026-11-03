@@ -830,11 +830,15 @@ void PetApp::showTrayMenu() {
     POINT pt;
     GetCursorPos(&pt);
     HMENU m = buildTrayMenu();
-    // 托盘菜单必须先拿到前台，否则点外面关不掉
+    // 托盘菜单要先拿到前台，否则点外面关不掉；但猫窗口带 WS_EX_NOACTIVATE 拿不到，
+    // 所以临时去掉这个样式，菜单收起后再装回去。
+    LONG ex = GetWindowLongW(hwnd_, GWL_EXSTYLE);
+    SetWindowLongW(hwnd_, GWL_EXSTYLE, ex & ~WS_EX_NOACTIVATE);
     SetForegroundWindow(hwnd_);
     TrackPopupMenu(m, TPM_RIGHTBUTTON | TPM_LEFTALIGN | TPM_BOTTOMALIGN, pt.x, pt.y, 0, hwnd_,
                    nullptr);
     PostMessage(hwnd_, WM_NULL, 0, 0);
+    SetWindowLongW(hwnd_, GWL_EXSTYLE, ex);
     DestroyMenu(m);
 }
 
