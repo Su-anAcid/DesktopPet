@@ -71,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/Su-anAcid/DesktopPet/main/install.s
 
 ## 🪟 Windows 版
 
-单文件 `DesktopPet.exe`（约 560 KB，Win32 + GDI+ 逐像素 alpha 分层窗口，不依赖任何运行时），**功能与 macOS 版完全对齐**：
+单文件 `DesktopPet.exe`（约 800 KB，Win32 + GDI+ 逐像素 alpha 分层窗口，静态链接、不依赖任何第三方运行时，Win10 及以上解压即用），**功能与 macOS 版完全对齐**：
 
 - 同一套像素猫：散步 / 发呆 / 睡觉 / 伸懒腰，舔爪子、爱心眼、Z 粒子
 - 小工具面板（右键点猫开合）：**打卡日历**（月历留痕、连续/最长/累计、按时长五档暖色着色）、**未来倒计时**（完整年月日、每年重复、行尾铅笔编辑 / × 删除并二次确认）、**提醒设置**（播报开关、提前范围、分钟级间隔、自定义）
