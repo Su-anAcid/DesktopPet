@@ -86,6 +86,11 @@ enum PrefKey {
     static let lick = "lickBeforeSit"
     static let originX = "panelX"
     static let originY = "panelY"
+    // 小工具
+    static let checkinDates = "checkinDates"
+    static let countdownEvents = "countdownEvents"
+    static let toolTab = "toolTab"
+    static let countdownNotifiedDay = "countdownNotifiedDay"
 }
 
 // MARK: - 开机自动启动（LaunchAgent）
@@ -151,6 +156,13 @@ final class PetController: NSObject {
     private var savedOrigin: NSPoint?
     private var statusItem: NSStatusItem?
     private var isPetHidden = false
+
+    // 小工具：打卡日历 + 事件倒计时
+    let checkInStore = CheckInStore()
+    let countdownStore = CountdownStore()
+    private var toolsPanel: ToolsPanelController?
+    private var cachedDayKey = DayKey.todayKey()
+    private var notifiedDay = UserDefaults.standard.string(forKey: PrefKey.countdownNotifiedDay) ?? ""
 
     // 过渡动画时间轴
     private var transSeq: [(String, Int)] = []
@@ -259,6 +271,17 @@ final class PetController: NSObject {
         layoutPetView()
         updateImage()
 
+        // 调试钩子：DESKTOPPET_OPEN_TOOLS=checkin|countdown 启动后直接打开面板，方便自测
+        if let raw = ProcessInfo.processInfo.environment["DESKTOPPET_OPEN_TOOLS"] {
+            let tab: ToolsPanelController.Tab = (raw == "countdown") ? .countdown : .checkIn
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                guard let self else { return }
+                let c = self.toolsPanel ?? self.makeToolsPanel()
+                self.toolsPanel = c
+                c.show(tab: tab, near: self.panel.frame)
+            }
+        }
+
         // 防止 App Nap 节流动画
         ProcessInfo.processInfo.beginActivity(options: .userInitiated,
                                               reason: "DesktopPet animation")
@@ -332,6 +355,13 @@ final class PetController: NSObject {
         } else if ticksLeft <= 0 {
             nextState()
         }
+
+        // 每 30 帧（约 1 秒）检查一次跨天与今日事件提醒
+        if tickCount % 30 == 0 {
+            refreshDayIfNeeded()
+            remindTodayEventsIfNeeded()
+        }
+
         updateImage()
     }
 
@@ -554,6 +584,17 @@ final class PetController: NSObject {
         let home = NSMenuItem(title: "回到桌面右下角", action: #selector(movePetHome), keyEquivalent: "")
         home.target = self
         menu.addItem(home)
+
+        let statusCheckIn = NSMenuItem(title: "打卡日历…", action: #selector(openTools(_:)), keyEquivalent: "")
+        statusCheckIn.tag = ToolsPanelController.Tab.checkIn.rawValue
+        statusCheckIn.target = self
+        menu.addItem(statusCheckIn)
+
+        let statusCountdown = NSMenuItem(title: "事件倒计时…", action: #selector(openTools(_:)), keyEquivalent: "")
+        statusCountdown.tag = ToolsPanelController.Tab.countdown.rawValue
+        statusCountdown.target = self
+        menu.addItem(statusCountdown)
+
         menu.addItem(.separator())
 
         let sleep = NSMenuItem(title: state == .sleeping ? "唤醒猫咪" : "让猫咪睡觉",
@@ -639,6 +680,68 @@ final class PetController: NSObject {
         savePrefs()
     }
 
+    // MARK: 小工具（打卡日历 / 事件倒计时）
+    private func makeToolsPanel() -> ToolsPanelController {
+        let c = ToolsPanelController(checkInStore: checkInStore, countdownStore: countdownStore)
+        c.accentProvider = { [weak self] in
+            guard let self else { return .controlAccentColor }
+            return ToolStyle.accent(from: petPalettes[self.paletteIndex].colors["g"])
+        }
+        c.onCheckIn = { [weak self] streak in
+            guard let self else { return }
+            self.cheer(ticks: 90, particle: "❤", count: 4)
+            // 里程碑额外报一次
+            if [1, 3, 7, 14, 21, 30, 50, 100, 200, 365].contains(streak) {
+                self.spawnParticles("连续 \(streak) 天！", count: 1)
+            }
+        }
+        c.onDuplicate = { [weak self] in
+            self?.spawnParticles("今天已经打过卡啦", count: 1)
+        }
+        c.onEventsChanged = { [weak self] in
+            // 新增的事件如果就在今天，让猫提醒一次
+            self?.notifiedDay = ""
+            self?.remindTodayEventsIfNeeded()
+        }
+        return c
+    }
+
+    @objc private func openTools(_ sender: NSMenuItem) {
+        let panelController = toolsPanel ?? makeToolsPanel()
+        toolsPanel = panelController
+        let tab = ToolsPanelController.Tab(rawValue: sender.tag) ?? .checkIn
+        panelController.show(tab: tab, near: panel.frame)
+    }
+
+    /// 工具面板的情绪反馈入口：只叠加爱心与粒子，不打断当前动作
+    func cheer(ticks: Int = 90, particle: String? = nil, count: Int = 1) {
+        loveTicks = max(loveTicks, ticks)
+        // 唯一例外：睡觉时先温柔唤醒
+        if state == .sleeping { enter(.idle, for: 120) }
+        if let particle { spawnParticles(particle, count: count) }
+    }
+
+    /// 跨天检测：猫可能连续开机好几天，不能把「今天」缓存成常量
+    private func refreshDayIfNeeded() {
+        let key = DayKey.todayKey()
+        guard key != cachedDayKey else { return }
+        cachedDayKey = key
+        checkInStore.load()
+        countdownStore.load()
+        toolsPanel?.refreshForNewDay()
+    }
+
+    /// 今天有事件 → 只提醒一次
+    private func remindTodayEventsIfNeeded() {
+        let today = DayKey.todayKey()
+        guard notifiedDay != today else { return }
+        let titles = countdownStore.todayEvents().map { $0.title }
+        guard let first = titles.first else { return }
+        notifiedDay = today
+        UserDefaults.standard.set(today, forKey: PrefKey.countdownNotifiedDay)
+        spawnParticles("今天：\(first)", count: 1)
+    }
+
     // MARK: 右键菜单
     private func addHeader(_ title: String, to menu: NSMenu) {
         let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
@@ -696,6 +799,19 @@ final class PetController: NSObject {
             item.state = i == tempoIndex ? .on : .off
             menu.addItem(item)
         }
+        menu.addItem(.separator())
+
+        // 小工具
+        addHeader("小工具", to: menu)
+        let checkInItem = NSMenuItem(title: "打卡日历…", action: #selector(openTools(_:)), keyEquivalent: "")
+        checkInItem.tag = ToolsPanelController.Tab.checkIn.rawValue
+        checkInItem.target = self
+        menu.addItem(checkInItem)
+
+        let countdownItem = NSMenuItem(title: "事件倒计时…", action: #selector(openTools(_:)), keyEquivalent: "")
+        countdownItem.tag = ToolsPanelController.Tab.countdown.rawValue
+        countdownItem.target = self
+        menu.addItem(countdownItem)
         menu.addItem(.separator())
 
         // 行为

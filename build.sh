@@ -3,7 +3,7 @@
 set -e
 cd "$(dirname "$0")"
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 APP="build/DesktopPet.app"
 
 mkdir -p build "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -24,7 +24,9 @@ plutil -replace CFBundleVersion -string "$(date +%Y%m%d)" "$APP/Contents/Info.pl
 
 # 3. 主程序
 echo "▸ 编译主程序..."
-swiftc -O Sources/SpriteData.swift Sources/App.swift -o "$APP/Contents/MacOS/DesktopPet"
+swiftc -O Sources/SpriteData.swift Sources/App.swift \
+    Sources/CheckIn.swift Sources/Countdown.swift Sources/ToolsPanel.swift \
+    -o "$APP/Contents/MacOS/DesktopPet"
 
 # 4. 本地签名（ad-hoc）
 codesign --force -s - "$APP" 2>/dev/null || true

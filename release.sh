@@ -33,10 +33,11 @@ plutil -replace CFBundleVersion -string "$BUILD_NUMBER" "$APP/Contents/Info.plis
 cp -f build/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 # ---------- 3. 通用二进制 ----------
+SRCS=(Sources/SpriteData.swift Sources/App.swift Sources/CheckIn.swift Sources/Countdown.swift Sources/ToolsPanel.swift)
 echo "▸ 编译 arm64 ..."
-swiftc -O -target arm64-apple-macos$MIN_MACOS Sources/SpriteData.swift Sources/App.swift -o build/release/pet-arm64
+swiftc -O -target arm64-apple-macos$MIN_MACOS "${SRCS[@]}" -o build/release/pet-arm64
 echo "▸ 编译 x86_64 ..."
-swiftc -O -target x86_64-apple-macos$MIN_MACOS Sources/SpriteData.swift Sources/App.swift -o build/release/pet-x86_64
+swiftc -O -target x86_64-apple-macos$MIN_MACOS "${SRCS[@]}" -o build/release/pet-x86_64
 lipo -create build/release/pet-arm64 build/release/pet-x86_64 \
      -output "$APP/Contents/MacOS/$APP_NAME"
 rm -f build/release/pet-arm64 build/release/pet-x86_64
