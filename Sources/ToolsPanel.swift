@@ -145,7 +145,26 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         }
         countdownView.onAdd = { [weak self] in self?.presentAddEvent() }
         countdownView.onDelete = { [weak self] _ in self?.eventsChanged() }
-        settingsView.onCustomInterval = { [weak self] in self?.presentCustomInterval() }
+        settingsView.onCustomStudyInterval = { [weak self] in
+            self?.presentCustomInterval(
+                title: "自定义学习播报间隔",
+                note: "学习计时中，每过这么久猫就报一次已学时长（1–240 分钟）。",
+                range: ReminderSettings.StudyInterval.minMinutes...ReminderSettings.StudyInterval.maxMinutes,
+                current: settings.studyIntervalMinutes
+            ) { [weak self] minutes in
+                self?.settings.setStudyInterval(minutes: minutes)
+            }
+        }
+        settingsView.onCustomCountdownInterval = { [weak self] in
+            self?.presentCustomInterval(
+                title: "自定义倒计时播报间隔",
+                note: "每隔这么久，猫就冒泡念一次最近的日子（5–43200 分钟，最长 30 天）。",
+                range: ReminderSettings.CountdownInterval.minMinutes...ReminderSettings.CountdownInterval.maxMinutes,
+                current: settings.countdownIntervalMinutes
+            ) { [weak self] minutes in
+                self?.settings.setCountdownInterval(minutes: minutes)
+            }
+        }
     }
 
     // MARK: 显示 / 关闭
@@ -364,8 +383,10 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         onEventsChanged?()
     }
 
-    // MARK: 自定义学习播报间隔
-    private func presentCustomInterval() {
+    // MARK: 自定义播报间隔
+    private func presentCustomInterval(title: String, note: String,
+                                       range: ClosedRange<Int>, current: Int,
+                                       apply: @escaping (Int) -> Void) {
         NSApp.activate(ignoringOtherApps: true)
         suppressAutoClose = true          // 弹窗期间不要把面板关掉
         defer {
@@ -374,9 +395,8 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         }
 
         let alert = NSAlert()
-        alert.messageText = "自定义播报间隔"
-        let range = ReminderSettings.StudyInterval.self
-        alert.informativeText = "学习计时中，每过这么久猫就报一次已学时长（\(range.minMinutes)–\(range.maxMinutes) 分钟）。"
+        alert.messageText = title
+        alert.informativeText = note
         alert.addButton(withTitle: "确定")
         alert.addButton(withTitle: "取消")
 
@@ -385,16 +405,16 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
         let suffix = NSTextField(labelWithString: "分钟")
         suffix.font = NSFont.systemFont(ofSize: 13)
 
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 64, height: 24))
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 72, height: 24))
         field.font = NSFont.systemFont(ofSize: 13)
         field.alignment = .center
-        field.stringValue = "\(settings.studyIntervalMinutes)"
+        field.stringValue = "\(current)"
 
         let stack = NSStackView(views: [prefix, field, suffix])
         stack.orientation = .horizontal
         stack.alignment = .centerY
         stack.spacing = 8
-        stack.frame = NSRect(x: 0, y: 0, width: 180, height: 26)
+        stack.frame = NSRect(x: 0, y: 0, width: 190, height: 26)
         alert.accessoryView = stack
 
         while true {
@@ -403,11 +423,11 @@ final class ToolsPanelController: NSObject, NSWindowDelegate {
                 alert.informativeText = "请输入整数分钟数"
                 continue
             }
-            guard (range.minMinutes...range.maxMinutes).contains(minutes) else {
-                alert.informativeText = "请填 \(range.minMinutes)–\(range.maxMinutes) 之间的分钟数"
+            guard range.contains(minutes) else {
+                alert.informativeText = "请填 \(range.lowerBound)–\(range.upperBound) 之间的分钟数"
                 continue
             }
-            settings.setStudyInterval(minutes: minutes)
+            apply(minutes)
             return
         }
     }

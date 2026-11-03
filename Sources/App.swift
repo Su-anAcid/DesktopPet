@@ -96,6 +96,7 @@ enum PrefKey {
     static let cdRemindEnabled = "cdRemindEnabled"
     static let cdRemindLead = "cdRemindLead"
     static let cdRemindInterval = "cdRemindInterval"
+    static let cdRemindLastAt = "cdRemindLastAt"
     static let studyRemindEnabled = "studyRemindEnabled"
     static let studyRemindInterval = "studyRemindInterval"
 }
@@ -172,6 +173,20 @@ final class PetController: NSObject {
     private var toolsPanel: ToolsPanelController?
     private var cachedDayKey = DayKey.todayKey()
     private var lastBubbleDay = UserDefaults.standard.string(forKey: PrefKey.countdownBubbleDay) ?? ""
+    /// 上次倒计时播报的时间点：分钟级间隔靠它判断（跨重启也保留，避免重新开就轰炸）
+    private var lastBubbleAt: Date? {
+        get {
+            let t = UserDefaults.standard.double(forKey: PrefKey.cdRemindLastAt)
+            return t > 0 ? Date(timeIntervalSince1970: t) : nil
+        }
+        set {
+            if let d = newValue {
+                UserDefaults.standard.set(d.timeIntervalSince1970, forKey: PrefKey.cdRemindLastAt)
+            } else {
+                UserDefaults.standard.removeObject(forKey: PrefKey.cdRemindLastAt)
+            }
+        }
+    }
     private var countdownBubble: PetBubble?
     /// 上一次「学习时长」播报时的今日累计秒数（用于按间隔触发）
     private var studyAnnounceBase = 0
@@ -829,15 +844,16 @@ final class PetController: NSObject {
 
         let today = DayKey.todayKey()
         if !force {
-            guard lastBubbleDay != today else { return }        // 今天已经说过
-            // 间隔：距上次播报不足 N 天就跳过；事件当天例外，必须提醒
-            if first.days > 0,
-               let gap = DayKey.daysBetween(lastBubbleDay, today), gap >= 0,
-               gap < reminderSettings.countdownInterval.days {
-                return
+            if first.days == 0 {
+                // 事件当天：一天只喊一次，免得「就是今天」每分钟重复
+                guard lastBubbleDay != today else { return }
+            } else {
+                // 其余日子按分钟级间隔走（可设 30 分钟 / 1 小时 / 每天…）
+                guard reminderSettings.countdownIntervalElapsed(since: lastBubbleAt) else { return }
             }
         }
         lastBubbleDay = today
+        lastBubbleAt = Date()
         UserDefaults.standard.set(today, forKey: PrefKey.countdownBubbleDay)
 
         let message: String
@@ -971,7 +987,7 @@ final class PetController: NSObject {
         【小工具面板】面板顶部切换三个标签
         • 打卡：每天点一次「今天打卡」，猫会开心，月历留痕并统计连续天数；顶部「开始 / 暂停」记录学习时长，日历格子按时长深浅着色
         • 倒计时：记下生日、上线、考试等日子，支持每年重复，按剩余天数排序
-        • 提醒：倒计时播报开关、开始提醒的范围（不限制 / 提前 30 天 / 提前 7 天 / 仅当天）、提醒间隔（每天 / 每 3 天 / 每 7 天）；学习计时中每过 5 / 10 / 15 / 30 分钟或自定义间隔，猫会冒气泡播报「已经学习了多久」
+        • 提醒：倒计时播报开关、开始提醒的范围（不限制 / 提前 30 天 / 提前 7 天 / 仅当天）、提醒间隔（30 分钟 / 1 小时 / 每天 / 每 3 天或自定义）；学习计时中每过 5 / 10 / 15 / 30 分钟或自定义间隔，猫会冒气泡播报「已经学习了多久」
 
         【其余设置】点菜单栏的猫头图标
         显示 / 隐藏猫咪、回到桌面右下角、打卡日历 / 事件倒计时 / 提醒一下倒计时 / 提醒设置、睡觉 / 唤醒、固定位置、坐下前舔爪子、开机自动启动、外观（毛色 / 大小 / 过渡节奏）、关于、退出

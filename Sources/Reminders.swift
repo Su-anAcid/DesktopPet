@@ -40,15 +40,40 @@ final class ReminderSettings {
         }
     }
 
-    /// 同一提醒之间至少隔几天
-    enum CountdownInterval: Int, CaseIterable {
-        case daily = 0
-        case every3 = 1
-        case every7 = 2
+    /// 倒计时播报间隔：以分钟为单位，所以既能「每 30 分钟」也能「每天」
+    enum CountdownInterval {
+        /// 预设档位（分钟）：30 分钟 / 1 小时 / 每天 / 每 3 天，其余走「自定义」
+        static let presets = [30, 60, 1440, 4320]
+        static let defaultMinutes = 1440
+        static let minMinutes = 5
+        static let maxMinutes = 43200          // 30 天
 
-        var days: Int { [1, 3, 7][rawValue] }
+        static func clamp(_ minutes: Int) -> Int {
+            min(max(minutes, minMinutes), maxMinutes)
+        }
 
-        var title: String { ["每天", "每 3 天", "每 7 天"][rawValue] }
+        static func isPreset(_ minutes: Int) -> Bool { presets.contains(minutes) }
+
+        /// 30 分钟 / 1 小时 / 每天 / 每 3 天 / 每 12 小时
+        static func label(_ minutes: Int) -> String {
+            if minutes >= 1440, minutes % 1440 == 0 {
+                let days = minutes / 1440
+                return days == 1 ? "每天" : "每 \(days) 天"
+            }
+            if minutes >= 60 {
+                if minutes % 60 == 0 {
+                    let hours = minutes / 60
+                    return hours == 1 ? "1 小时" : "\(hours) 小时"
+                }
+                return "\(minutes) 分钟"
+            }
+            return "\(minutes) 分钟"
+        }
+
+        /// 一句话节奏说明：每 30 分钟一次 / 每天一次
+        static func phrase(_ minutes: Int) -> String {
+            minutes == 1440 ? "每天一次" : "每 \(label(minutes))一次"
+        }
     }
 
     /// 学习计时中每多久播报一次已学时长
@@ -69,12 +94,13 @@ final class ReminderSettings {
     // MARK: 状态
     private(set) var countdownEnabled: Bool = true
     private(set) var countdownLead: CountdownLead = .sevenDays
-    private(set) var countdownInterval: CountdownInterval = .daily
+    private(set) var countdownIntervalMinutes: Int = CountdownInterval.defaultMinutes
     private(set) var studyEnabled: Bool = true
     private(set) var studyIntervalMinutes: Int = StudyInterval.defaultMinutes
 
     /// 当前间隔不在预设档位里 → 走的是「自定义」
     var isStudyIntervalCustom: Bool { !StudyInterval.isPreset(studyIntervalMinutes) }
+    var isCountdownIntervalCustom: Bool { !CountdownInterval.isPreset(countdownIntervalMinutes) }
 
     /// 任何一项被改动后回调（面板重绘 / 控制器重置播报节奏）
     var onChange: (() -> Void)?
@@ -93,8 +119,8 @@ final class ReminderSettings {
             countdownLead = e
         }
         if let v = defaults.object(forKey: PrefKey.cdRemindInterval) as? Int,
-           let e = CountdownInterval(rawValue: v) {
-            countdownInterval = e
+           (CountdownInterval.minMinutes...CountdownInterval.maxMinutes).contains(v) {
+            countdownIntervalMinutes = v
         }
         if let v = defaults.object(forKey: PrefKey.studyRemindEnabled) as? Bool {
             studyEnabled = v
@@ -108,7 +134,7 @@ final class ReminderSettings {
     private func commit() {
         defaults.set(countdownEnabled, forKey: PrefKey.cdRemindEnabled)
         defaults.set(countdownLead.rawValue, forKey: PrefKey.cdRemindLead)
-        defaults.set(countdownInterval.rawValue, forKey: PrefKey.cdRemindInterval)
+        defaults.set(countdownIntervalMinutes, forKey: PrefKey.cdRemindInterval)
         defaults.set(studyEnabled, forKey: PrefKey.studyRemindEnabled)
         defaults.set(studyIntervalMinutes, forKey: PrefKey.studyRemindInterval)
         onChange?()
@@ -126,10 +152,17 @@ final class ReminderSettings {
         commit()
     }
 
-    func setCountdownInterval(_ v: CountdownInterval) {
-        guard v != countdownInterval else { return }
-        countdownInterval = v
+    func setCountdownInterval(minutes: Int) {
+        let v = CountdownInterval.clamp(minutes)
+        guard v != countdownIntervalMinutes else { return }
+        countdownIntervalMinutes = v
         commit()
+    }
+
+    /// 距上次播报是否已经过了设定的间隔
+    func countdownIntervalElapsed(since last: Date?) -> Bool {
+        guard let last else { return true }
+        return Date().timeIntervalSince(last) >= Double(countdownIntervalMinutes) * 60
     }
 
     func setStudyEnabled(_ v: Bool) {
@@ -158,7 +191,8 @@ final class ReminderSettingsView: NSView {
     var accent: NSColor = .controlAccentColor { didSet { needsDisplay = true } }
     var onChange: (() -> Void)?
     /// 点「自定义」→ 由面板弹输入框（面板需要临时关闭「失焦即关」）
-    var onCustomInterval: (() -> Void)?
+    var onCustomStudyInterval: (() -> Void)?
+    var onCustomCountdownInterval: (() -> Void)?
 
     private let settings: ReminderSettings
     private let store: CountdownStore
@@ -172,7 +206,7 @@ final class ReminderSettingsView: NSView {
     private var cdLeadLabelY: CGFloat = 0
     private var cdLeadChips: [(rect: NSRect, item: ReminderSettings.CountdownLead)] = []
     private var cdIntLabelY: CGFloat = 0
-    private var cdIntChips: [(rect: NSRect, item: ReminderSettings.CountdownInterval)] = []
+    private var cdIntChips: [(rect: NSRect, minutes: Int?, title: String)] = []
     private var previewY: CGFloat = 0
     private var studyHeaderY: CGFloat = 0
     private var studyToggleY: CGFloat = 0
@@ -224,8 +258,16 @@ final class ReminderSettingsView: NSView {
 
         cdIntLabelY = y
         y += 16
-        cdIntChips = chipRow(y: y, count: ReminderSettings.CountdownInterval.allCases.count)
-            .enumerated().map { (i, r) in (rect: r, item: ReminderSettings.CountdownInterval(rawValue: i)!) }
+        let cdPresets = ReminderSettings.CountdownInterval.presets
+        let cdCount = cdPresets.count + 1
+        let cdRects = chipRow(y: y, count: cdCount)
+        var cdChips: [(rect: NSRect, minutes: Int?, title: String)] = []
+        for (i, m) in cdPresets.enumerated() {
+            let label = ReminderSettings.CountdownInterval.label(m)
+            cdChips.append((rect: cdRects[i], minutes: m, title: label))
+        }
+        cdChips.append((rect: cdRects[cdCount - 1], minutes: nil, title: "自定义"))
+        cdIntChips = cdChips
         y += chipH + 10
 
         previewY = y
@@ -274,9 +316,17 @@ final class ReminderSettingsView: NSView {
 
         label("提醒间隔", x: sidePad, y: cdIntLabelY, size: 11, weight: .regular,
               color: .secondaryLabelColor, enabled: cdOn)
+        let cdValueText = ReminderSettings.CountdownInterval
+            .phrase(settings.countdownIntervalMinutes)
+        let cdValueStr = ToolStyle.text(cdValueText, font: NSFont.systemFont(ofSize: 10.5),
+                                        color: cdOn ? accent : NSColor.tertiaryLabelColor)
+        let cdValueSize = cdValueStr.size()
+        cdValueStr.draw(at: NSPoint(x: bounds.width - sidePad - cdValueSize.width, y: cdIntLabelY + 1))
         for chip in cdIntChips {
-            drawChip(chip.rect, title: chip.item.title,
-                     selected: chip.item == settings.countdownInterval, enabled: cdOn)
+            let selected = chip.minutes == nil
+                ? settings.isCountdownIntervalCustom
+                : chip.minutes == settings.countdownIntervalMinutes
+            drawChip(chip.rect, title: chip.title, selected: selected, enabled: cdOn)
         }
 
         // 当前状态一句话：设置改完立刻能看到影响
@@ -431,8 +481,12 @@ final class ReminderSettingsView: NSView {
                 return
             }
             if let hit = cdIntChips.first(where: { $0.rect.contains(p) }) {
-                settings.setCountdownInterval(hit.item)
-                notifyChange()
+                if let m = hit.minutes {
+                    settings.setCountdownInterval(minutes: m)
+                    notifyChange()
+                } else {
+                    onCustomCountdownInterval?()
+                }
                 return
             }
         }
@@ -443,7 +497,7 @@ final class ReminderSettingsView: NSView {
                 settings.setStudyInterval(minutes: m)
                 notifyChange()
             } else {
-                onCustomInterval?()          // 交给面板弹输入框
+                onCustomStudyInterval?()     // 交给面板弹输入框
             }
             return
         }
