@@ -44,23 +44,23 @@ jobs:
       - name: Build & package
         shell: msys2 {0}
         run: |
-          # 注意：脚本必须是 LF 换行（见 .gitattributes），CRLF 会让 bash 报 127
+          # GitHub 只保留 10 条注解，所以失败时只把最有价值的几行报上来
           set +e
           VERSION="${GITHUB_REF_NAME#v}"
           if [[ "$GITHUB_REF" != refs/tags/* ]]; then VERSION="dev"; fi
           export VERSION
-          echo "VERSION=$VERSION  PWD=$(pwd)"
-          command -v x86_64-w64-mingw32-g++ || echo "!! 找不到 g++"
-          command -v x86_64-w64-mingw32-windres || echo "!! 找不到 windres"
           cd Windows || exit 1
           sed -i 's/\r$//' build-win.sh   # 万一 checkout 还是 CRLF，就地修掉
           bash -x ./build-win.sh > /tmp/winbuild.log 2>&1
           rc=$?
+          echo "===== 构建日志（末尾 40 行）====="
           tail -n 40 /tmp/winbuild.log
           if [ "$rc" -ne 0 ]; then
-            echo "::error::build-win.sh 退出码 $rc"
-            tail -n 20 /tmp/winbuild.log | tr -d '\r' | while IFS= read -r line; do
-              echo "::error::$(printf '%s' "$line" | tr '%' ' ')"
+            echo "::error::build-win.sh 退出码 $rc；MSYSTEM=$MSYSTEM；PWD=$(pwd)"
+            echo "::error::g++=$(command -v x86_64-w64-mingw32-g++ || echo 缺失) windres=$(command -v x86_64-w64-mingw32-windres || echo 缺失)"
+            echo "::error::assets=$(ls assets | tr '\n' ' ')"
+            tail -n 5 /tmp/winbuild.log | tr -d '\r' | while IFS= read -r line; do
+              echo "::error::LOG> $(printf '%s' "$line" | tr '%' ' ')"
             done
           fi
           exit "$rc"
